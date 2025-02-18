@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import { Button } from "@/components/ui/button"
@@ -11,12 +10,30 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card"
 import { professionLevels } from "@/lib/constants"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Skeleton } from "@/components/ui/skeleton"
 
 export default function Onboarding() {
   const [step, setStep] = useState(1)
   const [learningGoal, setLearningGoal] = useState("")
   const [professionLevel, setProfessionLevel] = useState("")
+  const [error, setError] = useState<Error | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // Simulate data loading
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        setIsLoading(false)
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error("An error occurred"))
+        setIsLoading(false)
+      }
+    }
+    loadData()
+  }, [])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -27,6 +44,25 @@ export default function Onboarding() {
       localStorage.setItem("professionLevel", professionLevel)
       router.push("/assessment")
     }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <Skeleton className="w-[350px] h-[400px]" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <Alert variant="destructive">
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>{error.message}</AlertDescription>
+        </Alert>
+      </div>
+    )
   }
 
   return (

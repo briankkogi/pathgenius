@@ -37,18 +37,15 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
+    --background: 0 0% 0%;
+    --card: 0 0% 0%;
+    --popover: 0 0% 0%;
     --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
     --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
     --popover-foreground: 210 40% 98%;
-
-    --primary: 217.2 91.2% 59.8%;
+    --primary: 0 0% 100%;
     --primary-foreground: 222.2 47.4% 11.2%;
-    --primary-dark: 217.2 91.2% 49.8%;
+    --primary-dark: 0 0% 90%;
 
     --secondary: 217.2 32.6% 17.5%;
     --secondary-foreground: 210 40% 98%;
@@ -74,6 +71,12 @@
   }
   body {
     @apply bg-background text-foreground;
+    background-image: radial-gradient(at 100% 100%, rgba(var(--primary) / 0.05) 0px, transparent 50%),
+      radial-gradient(at 0% 0%, rgba(var(--secondary) / 0.05) 0px, transparent 50%);
+    background-attachment: fixed;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
   }
 }
 
@@ -89,5 +92,64 @@
 
 .features-bg-dark {
   background-color: rgba(17, 24, 39, 0.5);
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Smooth transitions for sidebar */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  z-index: 1000;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar-content {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.sidebar-collapsed .sidebar-content {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
+.sidebar-expanded .sidebar-content {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.sidebar-collapsed {
+  width: 80px;
+}
+
+.sidebar-expanded {
+  width: 240px;
+}
+
+.sidebar:not(:hover).sidebar-collapsed {
+  width: 0;
+  overflow: hidden;
+}
+
+.sidebar:hover.sidebar-collapsed {
+  width: 240px;
 }
 

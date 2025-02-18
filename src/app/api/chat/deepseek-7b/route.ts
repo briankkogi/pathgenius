@@ -1,3 +1,5 @@
+import { ReadableStream } from "stream/web"
+
 export async function POST(req: Request) {
   const { message } = await req.json()
 
@@ -5,14 +7,14 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        console.log("Sending request to Ollama...")
+        console.log("Sending request to Ollama (DeepSeek 7B)...")
         const response = await fetch("http://localhost:11434/api/generate", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "deepseek-r1:1.5b",
+            model: "deepseek-r1:7b",
             prompt: message,
             stream: true,
           }),
@@ -63,7 +65,7 @@ export async function POST(req: Request) {
         }
 
         controller.close()
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Error in API route:", error)
         controller.error(error)
       }

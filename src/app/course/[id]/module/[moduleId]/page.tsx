@@ -2,13 +2,13 @@
 
 import { useParams, useRouter } from "next/navigation"
 import { useState, useEffect } from "react"
+import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ArrowLeft, ArrowRight, CheckCircle, Video, FileText, MessageSquare } from "lucide-react"
 import YouTube from "react-youtube"
-import { motion, AnimatePresence } from "framer-motion"
 import { AIChatBox } from "@/components/AIChatBox"
 
 // Mock course data structure with more comprehensive content
@@ -93,7 +93,7 @@ const coursesData = {
           },
         ],
       },
-      // ... other modules
+      // Add more modules here
     ],
   },
   // Add more courses as needed
@@ -110,7 +110,6 @@ export default function ModulePage() {
   const [quizAnswers, setQuizAnswers] = useState<number[]>([])
   const [quizSubmitted, setQuizSubmitted] = useState(false)
   const [activeTab, setActiveTab] = useState("content")
-  const [showChat, setShowChat] = useState(false)
 
   useEffect(() => {
     const course = coursesData[courseId]
@@ -130,10 +129,12 @@ export default function ModulePage() {
     }
   }, [currentTopicIndex, module])
 
-  const handleTopicComplete = () => {
-    if (currentTopicIndex < module.topics.length - 1) {
+  const handleTopicNavigation = (direction: "prev" | "next") => {
+    if (direction === "prev" && currentTopicIndex > 0) {
+      setCurrentTopicIndex(currentTopicIndex - 1)
+    } else if (direction === "next" && currentTopicIndex < module.topics.length - 1) {
       setCurrentTopicIndex(currentTopicIndex + 1)
-    } else {
+    } else if (direction === "next" && currentTopicIndex === module.topics.length - 1) {
       setActiveTab("quiz")
     }
   }
@@ -153,10 +154,12 @@ export default function ModulePage() {
 
   const navigateToModule = (direction: "prev" | "next") => {
     const course = coursesData[courseId]
-    const currentIndex = course.modules.findIndex((m) => m.id.toString() === moduleId)
-    const newIndex = direction === "prev" ? currentIndex - 1 : currentIndex + 1
+    const currentModuleIndex = course.modules.findIndex((m) => m.id.toString() === moduleId)
+    const newIndex = direction === "prev" ? currentModuleIndex - 1 : currentModuleIndex + 1
+
     if (newIndex >= 0 && newIndex < course.modules.length) {
-      router.push(`/course/${courseId}/module/${course.modules[newIndex].id}`)
+      const newModuleId = course.modules[newIndex].id
+      router.push(`/course/${courseId}/module/${newModuleId}`)
     }
   }
 
@@ -176,10 +179,17 @@ export default function ModulePage() {
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Course
         </Button>
         <div className="flex items-center space-x-4">
-          <Button variant="outline" onClick={() => navigateToModule("prev")}>
+          <Button
+            variant="outline"
+            onClick={() => navigateToModule("prev")}
+            disabled={module.id === coursesData[courseId].modules[0].id}
+          >
             <ArrowLeft className="mr-2 h-4 w-4" /> Previous Module
           </Button>
-          <Button onClick={() => navigateToModule("next")}>
+          <Button
+            onClick={() => navigateToModule("next")}
+            disabled={module.id === coursesData[courseId].modules[coursesData[courseId].modules.length - 1].id}
+          >
             Next Module <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
@@ -226,7 +236,7 @@ export default function ModulePage() {
                                   },
                                 }}
                                 className="w-full h-full"
-                                onEnd={() => index === currentTopicIndex && handleTopicComplete()}
+                                onEnd={() => index === currentTopicIndex && handleTopicNavigation("next")}
                               />
                             </div>
                             <div className="prose max-w-none">
@@ -237,9 +247,15 @@ export default function ModulePage() {
                         ) : (
                           <div className="prose max-w-none" dangerouslySetInnerHTML={{ __html: topic.content }} />
                         )}
-                        <Button onClick={handleTopicComplete} className="mt-6">
-                          {index === module.topics.length - 1 ? "Finish Module" : "Next Topic"}
-                        </Button>
+                        <div className="flex justify-between mt-6">
+                          <Button onClick={() => handleTopicNavigation("prev")} disabled={currentTopicIndex === 0}>
+                            <ArrowLeft className="mr-2 h-4 w-4" /> Previous Topic
+                          </Button>
+                          <Button onClick={() => handleTopicNavigation("next")}>
+                            {index === module.topics.length - 1 ? "Finish Module" : "Next Topic"}{" "}
+                            <ArrowRight className="ml-2 h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </motion.div>
@@ -299,7 +315,7 @@ export default function ModulePage() {
                   </motion.div>
                 </AnimatePresence>
               </TabsContent>
-              <TabsContent value="chat">
+              <TabsContent value="chat" className="h-[600px]">
                 <AIChatBox />
               </TabsContent>
             </Tabs>

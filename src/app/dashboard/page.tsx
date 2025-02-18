@@ -5,7 +5,7 @@ import { motion } from "framer-motion"
 import { Progress } from "@/components/ui/progress"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { BookOpen, Award, TrendingUp, Plus } from "lucide-react"
+import { BookOpen, Award, TrendingUp, Plus, ArrowRight } from "lucide-react"
 import Link from "next/link"
 
 // Mock data for demonstration purposes
@@ -47,7 +47,7 @@ function DashboardHeader({ name }) {
         Welcome back, {name}!
       </motion.h1>
       <Link href="/onboarding" passHref>
-        <Button as="a">
+        <Button>
           <Plus className="mr-2 h-4 w-4" /> Add Course
         </Button>
       </Link>
@@ -137,7 +137,9 @@ function CourseCard({ course, index }) {
         <CardContent>
           <Progress value={course.progress} className="mb-4" />
           <Button asChild className="w-full">
-            <Link href={`/course/${course.id}`}>{course.progress > 0 ? "Continue" : "Start"} Course</Link>
+            <Link href={`/course/${course.id}`}>
+              {course.progress > 0 ? "Continue" : "Start"} Course <ArrowRight className="ml-2 h-4 w-4" />
+            </Link>
           </Button>
         </CardContent>
       </Card>
