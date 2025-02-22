@@ -11,7 +11,7 @@ import Link from "next/link"
 // Mock data for demonstration purposes
 const userData = {
   name: "John Doe",
-  overallProgress: 65,
+  overallProgress: 100,
   coursesInProgress: 3,
   coursesCompleted: 2,
 }

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Loader2, Send } from "lucide-react"
+import { Loader2, Send, ChevronDown } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
@@ -39,7 +39,7 @@ export function AIChatBox() {
     if (scrollAreaRef.current) {
       scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight
     }
-  }, [scrollAreaRef]) //Corrected dependency
+  }, [messages])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -106,22 +106,30 @@ export function AIChatBox() {
 
   return (
     <Card className="w-full h-full flex flex-col bg-gradient-to-b from-background to-background/80 shadow-lg">
-      <CardHeader className="bg-primary text-primary-foreground py-3">
-        <CardTitle className="text-xl font-bold flex items-center justify-between">
-          AI Assistant
-          <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Select a model" />
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((model) => (
-                <SelectItem key={model.value} value={model.value}>
-                  {model.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </CardTitle>
+      <CardHeader className="bg-primary text-primary-foreground py-3 flex flex-row items-center justify-between">
+        <CardTitle className="text-xl font-bold">AI Assistant</CardTitle>
+        <Select value={selectedModel} onValueChange={setSelectedModel}>
+          <SelectTrigger className="w-[200px] bg-primary-foreground text-primary">
+            <SelectValue placeholder="Select a model" />
+          </SelectTrigger>
+          <SelectContent
+            position="popper"
+            align="end"
+            className="w-[200px]"
+          >
+            {models.map((model) => (
+              <SelectItem
+                key={model.value}
+                value={model.value}
+                className={`py-2 px-4 cursor-pointer transition-colors ${
+                  selectedModel === model.value ? "bg-primary/10 text-primary" : "hover:bg-primary/5"
+                }`}
+              >
+                {model.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </CardHeader>
       <CardContent className="flex-grow overflow-hidden p-4" ref={scrollAreaRef}>
         <ScrollArea className="h-full pr-4">
@@ -140,7 +148,7 @@ export function AIChatBox() {
                 className={`rounded-lg p-3 max-w-[80%] ${
                   message.role === "user"
                     ? "bg-primary text-primary-foreground"
-                    : "bg-secondary text-secondary-foreground"
+                    : "bg-muted text-muted-foreground"
                 }`}
               >
                 <ReactMarkdown
