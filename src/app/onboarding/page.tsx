@@ -16,6 +16,7 @@ import { useFirebase } from "@/contexts/FirebaseContext"
 import { doc, setDoc, getDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { toast } from "sonner"
+import { collection } from "firebase/firestore"
 
 export default function Onboarding() {
   const [step, setStep] = useState(1)
@@ -63,30 +64,68 @@ export default function Onboarding() {
     } else if (step === 2 && professionLevel && user) {
       setIsSubmitting(true)
       try {
+        // Before creating a session, check if the backend is healthy
+        try {
+          const response = await fetch('http://localhost:8000/api/health');
+          if (!response.ok) {
+            throw new Error("Assessment service is currently unavailable");
+          }
+        } catch (backendError) {
+          // Show a warning but proceed anyway
+          toast.warning("Assessment service may be unavailable. Your experience might be limited.");
+          console.warn("Backend health check failed:", backendError);
+          // Continue with the rest of the process
+        }
+        
         if (isAddCourse) {
-          // Handle adding a new course
-          await setDoc(doc(db, "users", user.uid, "courses", new Date().getTime().toString()), {
+          // Create a new assessment session document in Firestore
+          const assessmentSessionRef = doc(collection(db, "assessmentSessions"));
+          await setDoc(assessmentSessionRef, {
+            userId: user.uid,
             learningGoal,
             professionLevel,
-            progress: 0,
-            startedAt: new Date().toISOString(),
-          })
-          toast.success("Course added successfully!")
-          router.push("/dashboard")
+            isAddCourse: true,
+            createdAt: new Date().toISOString(),
+            status: "pending"
+          });
+          
+          toast.success("Course preferences saved! Let's complete a quick assessment.");
+          router.push(`/assessment?sessionId=${assessmentSessionRef.id}`);
         } else {
-          // Handle initial onboarding
+          // Handle initial onboarding - save to user profile
+          // Instead of setting a general professionLevel, we'll create a topics map
+          // that stores the professionLevel for each topic
           await setDoc(doc(db, "users", user.uid), {
+            // Add the initial learning goal
+            initialLearningGoal: learningGoal,
+            // Store topic-specific profession levels
+            topics: {
+              [learningGoal]: {
+                professionLevel,
+                addedAt: new Date().toISOString()
+              }
+            },
+            updatedAt: new Date().toISOString(),
+          }, { merge: true });
+          
+          // Create assessment session for initial onboarding
+          const assessmentSessionRef = doc(collection(db, "assessmentSessions"));
+          await setDoc(assessmentSessionRef, {
+            userId: user.uid,
             learningGoal,
             professionLevel,
-            updatedAt: new Date().toISOString(),
-          }, { merge: true })
-          router.push("/assessment")
+            isAddCourse: false,
+            createdAt: new Date().toISOString(),
+            status: "pending"
+          });
+          
+          router.push(`/assessment?sessionId=${assessmentSessionRef.id}`);
         }
       } catch (error) {
-        console.error("Error saving data:", error)
-        toast.error(isAddCourse ? "Failed to add course" : "Failed to save preferences")
+        console.error("Error saving data:", error);
+        toast.error(isAddCourse ? "Failed to add course" : "Failed to save preferences");
       } finally {
-        setIsSubmitting(false)
+        setIsSubmitting(false);
       }
     }
   }
@@ -129,7 +168,11 @@ export default function Onboarding() {
             {step === 1 ? (
               <LearningGoalInput learningGoal={learningGoal} setLearningGoal={setLearningGoal} />
             ) : (
-              <ProfessionLevelInput professionLevel={professionLevel} setProfessionLevel={setProfessionLevel} />
+              <ProfessionLevelInput 
+                learningGoal={learningGoal}
+                professionLevel={professionLevel} 
+                setProfessionLevel={setProfessionLevel} 
+              />
             )}
           </form>
         </CardContent>
@@ -143,7 +186,65 @@ export default function Onboarding() {
   )
 }
 
-function OnboardingForm({ step, learningGoal, setLearningGoal, professionLevel, setProfessionLevel, handleSubmit }) {
+interface ProfessionLevelInputProps {
+  learningGoal: string;
+  professionLevel: string;
+  setProfessionLevel: (value: string) => void;
+}
+
+function ProfessionLevelInput({ learningGoal, professionLevel, setProfessionLevel }: ProfessionLevelInputProps) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+      <Label>What's your experience level with {learningGoal}?</Label>
+      <RadioGroup value={professionLevel} onValueChange={setProfessionLevel} className="mt-2 space-y-2">
+        {professionLevels.map((level) => (
+          <div key={level.id} className="flex items-center space-x-2">
+            <RadioGroupItem value={level.id} id={level.id} />
+            <Label htmlFor={level.id}>{level.label}</Label>
+          </div>
+        ))}
+      </RadioGroup>
+    </motion.div>
+  )
+}
+
+interface LearningGoalInputProps {
+  learningGoal: string;
+  setLearningGoal: (value: string) => void;
+}
+
+function LearningGoalInput({ learningGoal, setLearningGoal }: LearningGoalInputProps) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
+      <Label htmlFor="learning-goal">What do you want to learn?</Label>
+      <Input
+        id="learning-goal"
+        value={learningGoal}
+        onChange={(e) => setLearningGoal(e.target.value)}
+        placeholder="e.g., Web Development, Data Science"
+        className="mt-2"
+      />
+    </motion.div>
+  )
+}
+
+interface OnboardingFormProps {
+  step: number;
+  learningGoal: string;
+  setLearningGoal: (value: string) => void;
+  professionLevel: string;
+  setProfessionLevel: (value: string) => void;
+  handleSubmit: (e: React.FormEvent) => void;
+}
+
+function OnboardingForm({ 
+  step, 
+  learningGoal, 
+  setLearningGoal, 
+  professionLevel, 
+  setProfessionLevel, 
+  handleSubmit 
+}: OnboardingFormProps) {
   return (
     <motion.div
       key="onboarding"
@@ -162,7 +263,11 @@ function OnboardingForm({ step, learningGoal, setLearningGoal, professionLevel, 
             {step === 1 ? (
               <LearningGoalInput learningGoal={learningGoal} setLearningGoal={setLearningGoal} />
             ) : (
-              <ProfessionLevelInput professionLevel={professionLevel} setProfessionLevel={setProfessionLevel} />
+              <ProfessionLevelInput 
+                learningGoal={learningGoal}
+                professionLevel={professionLevel} 
+                setProfessionLevel={setProfessionLevel} 
+              />
             )}
           </form>
         </CardContent>
@@ -172,37 +277,6 @@ function OnboardingForm({ step, learningGoal, setLearningGoal, professionLevel, 
           </Button>
         </CardFooter>
       </Card>
-    </motion.div>
-  )
-}
-
-function LearningGoalInput({ learningGoal, setLearningGoal }) {
-  return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-      <Label htmlFor="learning-goal">What do you want to learn?</Label>
-      <Input
-        id="learning-goal"
-        value={learningGoal}
-        onChange={(e) => setLearningGoal(e.target.value)}
-        placeholder="e.g., Web Development, Data Science"
-        className="mt-2"
-      />
-    </motion.div>
-  )
-}
-
-function ProfessionLevelInput({ professionLevel, setProfessionLevel }) {
-  return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-      <Label>Choose your profession level:</Label>
-      <RadioGroup value={professionLevel} onValueChange={setProfessionLevel} className="mt-2 space-y-2">
-        {professionLevels.map((level) => (
-          <div key={level.id} className="flex items-center space-x-2">
-            <RadioGroupItem value={level.id} id={level.id} />
-            <Label htmlFor={level.id}>{level.label}</Label>
-          </div>
-        ))}
-      </RadioGroup>
     </motion.div>
   )
 }
