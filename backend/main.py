@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import httpx
+from fastapi import FastAPI, HTTPException # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from pydantic import BaseModel # type: ignore
+import httpx # type: ignore
 import os
 from typing import List, Dict, Any, Optional
 import json
@@ -247,5 +247,5 @@ async def health_check():
     return {"status": "ok", "timestamp": time.time()}
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn # type: ignore
     uvicorn.run(app, host="0.0.0.0", port=8000) 
