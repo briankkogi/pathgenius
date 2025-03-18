@@ -7,6 +7,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
+import { useFirebase } from "@/contexts/FirebaseContext"
+import { doc, setDoc, collection } from "firebase/firestore"
+import { db } from "@/lib/firebase"
+import { toast } from "sonner"
 
 const questions = [
   {
@@ -36,26 +40,79 @@ export default function Assessment() {
   const [currentQuestion, setCurrentQuestion] = useState(0)
   const [answers, setAnswers] = useState({})
   const [learningGoal, setLearningGoal] = useState("")
+  const [professionLevel, setProfessionLevel] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const router = useRouter()
+  const { user, loading } = useFirebase()
 
   useEffect(() => {
-    const storedLearningGoal = localStorage.getItem("learningGoal")
-    if (storedLearningGoal) {
-      setLearningGoal(storedLearningGoal)
+    // Redirect if not authenticated
+    if (!loading && !user) {
+      toast.error("Please sign in to continue")
+      router.push("/sign-in")
+      return
     }
-  }, [])
+
+    const storedLearningGoal = localStorage.getItem("learningGoal")
+    const storedProfessionLevel = localStorage.getItem("professionLevel")
+    if (storedLearningGoal) setLearningGoal(storedLearningGoal)
+    if (storedProfessionLevel) setProfessionLevel(storedProfessionLevel)
+  }, [user, loading, router])
 
   const handleAnswer = (questionId: number, answerId: string) => {
     setAnswers({ ...answers, [questionId]: answerId })
   }
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentQuestion < questions.length - 1) {
       setCurrentQuestion(currentQuestion + 1)
     } else {
-      // Redirect to the loading curation page
-      router.push(`/loading-curation?goal=${encodeURIComponent(learningGoal)}`)
+      setIsSubmitting(true)
+      try {
+        if (!user) throw new Error("User not authenticated")
+
+        // Create a new assessment document in the user's assessments collection
+        const assessmentRef = doc(collection(db, `users/${user.uid}/assessments`))
+        
+        await setDoc(assessmentRef, {
+          learningGoal,
+          professionLevel,
+          answers,
+          completedAt: new Date().toISOString(),
+          userId: user.uid,
+          status: "completed",
+        })
+
+        // Update user's profile with latest assessment
+        await setDoc(doc(db, "users", user.uid), {
+          lastAssessment: {
+            id: assessmentRef.id,
+            completedAt: new Date().toISOString(),
+            learningGoal,
+            professionLevel,
+          }
+        }, { merge: true })
+
+        router.push(`/loading-curation?goal=${encodeURIComponent(learningGoal)}`)
+      } catch (error) {
+        console.error("Error saving assessment:", error)
+        toast.error("Failed to save assessment results")
+      } finally {
+        setIsSubmitting(false)
+      }
     }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <Card className="w-[450px]">
+          <CardHeader>
+            <CardTitle>Loading...</CardTitle>
+          </CardHeader>
+        </Card>
+      </div>
+    )
   }
 
   const question = questions[currentQuestion]
@@ -92,8 +149,12 @@ export default function Assessment() {
           </motion.div>
         </CardContent>
         <CardFooter>
-          <Button onClick={handleNext} className="w-full">
-            {currentQuestion < questions.length - 1 ? "Next" : "Finish"}
+          <Button onClick={handleNext} className="w-full" disabled={isSubmitting}>
+            {isSubmitting
+              ? "Saving..."
+              : currentQuestion < questions.length - 1
+              ? "Next"
+              : "Finish"}
           </Button>
         </CardFooter>
       </Card>

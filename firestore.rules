@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      match /assessments/{assessmentId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    
+    // Add rules for conversations collection
+    match /conversations/{conversationId} {
+      // Allow read/write to a conversation if the user is the owner
+      allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
+      
+      // For new documents being created
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+      
+      // Allow access to messages subcollection
+      match /messages/{messageId} {
+        allow read, write: if request.auth != null && 
+          (request.auth.uid == get(/databases/$(database)/documents/conversations/$(conversationId)).data.userId);
+      }
+    }
+  }
+} 

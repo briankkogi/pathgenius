@@ -6,6 +6,8 @@ import { ThemeProvider } from "./components/ThemeProvider"
 import Header from "./components/Header"
 import Footer from "./components/Footer"
 import { ClientLayout } from "./components/ClientLayout"
+import { FirebaseProvider } from "@/contexts/FirebaseContext"
+import { Toaster } from "sonner"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -24,11 +26,14 @@ export default function RootLayout({
     <html lang="en" className="scroll-smooth" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <div className="flex flex-col min-h-screen">
-            <Header />
-            <ClientLayout>{children}</ClientLayout>
-            <Footer />
-          </div>
+          <FirebaseProvider>
+            <div className="flex flex-col min-h-screen">
+              <Header />
+              <ClientLayout>{children}</ClientLayout>
+              <Footer />
+            </div>
+            <Toaster />
+          </FirebaseProvider>
         </ThemeProvider>
       </body>
     </html>

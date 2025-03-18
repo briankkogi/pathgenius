@@ -1,22 +1,31 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
 import { Progress } from "@/components/ui/progress"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BookOpen, Award, TrendingUp, Plus, ArrowRight } from "lucide-react"
 import Link from "next/link"
+import { useFirebase } from "@/contexts/FirebaseContext"
+import { doc, getDoc } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 
-// Mock data for demonstration purposes
-const userData = {
-  name: "John Doe",
-  overallProgress: 100,
-  coursesInProgress: 3,
-  coursesCompleted: 2,
+interface UserData {
+  name: string
+  email: string
+  overallProgress?: number
+  coursesInProgress?: number
+  coursesCompleted?: number
 }
 
-const initialCourses = [
+interface Course {
+  id: number
+  title: string
+  progress: number
+}
+
+const initialCourses: Course[] = [
   { id: 1, title: "Introduction to AI", progress: 0 },
   { id: 2, title: "Machine Learning Basics", progress: 30 },
   { id: 3, title: "Data Structures and Algorithms", progress: 75 },
@@ -24,7 +33,34 @@ const initialCourses = [
 ]
 
 export default function Dashboard() {
-  const [courses, setCourses] = useState(initialCourses)
+  const [courses, setCourses] = useState<Course[]>(initialCourses)
+  const [userData, setUserData] = useState<UserData | null>(null)
+  const { user } = useFirebase()
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", user.uid))
+          if (userDoc.exists()) {
+            setUserData({
+              ...userDoc.data() as UserData,
+              overallProgress: 100,
+              coursesInProgress: 3,
+              coursesCompleted: 2,
+            })
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error)
+        }
+      }
+    }
+    fetchUserData()
+  }, [user])
+
+  if (!userData) {
+    return null // Or a loading spinner
+  }
 
   return (
     <div className="space-y-8">
@@ -35,7 +71,11 @@ export default function Dashboard() {
   )
 }
 
-function DashboardHeader({ name }) {
+interface DashboardHeaderProps {
+  name: string
+}
+
+function DashboardHeader({ name }: DashboardHeaderProps) {
   return (
     <div className="flex justify-between items-center">
       <motion.h1
@@ -46,7 +86,7 @@ function DashboardHeader({ name }) {
       >
         Welcome back, {name}!
       </motion.h1>
-      <Link href="/onboarding" passHref>
+      <Link href="/onboarding?mode=add-course" passHref>
         <Button>
           <Plus className="mr-2 h-4 w-4" /> Add Course
         </Button>
@@ -55,25 +95,37 @@ function DashboardHeader({ name }) {
   )
 }
 
-function StatsSection({ userData }) {
+interface StatsSectionProps {
+  userData: UserData
+}
+
+function StatsSection({ userData }: StatsSectionProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       <ProgressCard
         title="Overall Progress"
-        value={userData.overallProgress}
+        value={userData.overallProgress || 0}
         icon={<TrendingUp className="h-6 w-6" />}
       />
       <StatsCard
         title="Courses in Progress"
-        value={userData.coursesInProgress}
+        value={userData.coursesInProgress || 0}
         icon={<BookOpen className="h-6 w-6" />}
       />
-      <StatsCard title="Courses Completed" value={userData.coursesCompleted} icon={<Award className="h-6 w-6" />} />
+      <StatsCard 
+        title="Courses Completed" 
+        value={userData.coursesCompleted || 0} 
+        icon={<Award className="h-6 w-6" />} 
+      />
     </div>
   )
 }
 
-function CoursesSection({ courses }) {
+interface CoursesSectionProps {
+  courses: Course[]
+}
+
+function CoursesSection({ courses }: CoursesSectionProps) {
   return (
     <>
       <motion.h2
@@ -93,7 +145,13 @@ function CoursesSection({ courses }) {
   )
 }
 
-function ProgressCard({ title, value, icon }) {
+interface CardProps {
+  title: string
+  value: number
+  icon: React.ReactNode
+}
+
+function ProgressCard({ title, value, icon }: CardProps) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -108,7 +166,7 @@ function ProgressCard({ title, value, icon }) {
   )
 }
 
-function StatsCard({ title, value, icon }) {
+function StatsCard({ title, value, icon }: CardProps) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -122,7 +180,12 @@ function StatsCard({ title, value, icon }) {
   )
 }
 
-function CourseCard({ course, index }) {
+interface CourseCardProps {
+  course: Course
+  index: number
+}
+
+function CourseCard({ course, index }: CourseCardProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}

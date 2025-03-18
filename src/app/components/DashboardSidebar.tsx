@@ -1,15 +1,22 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import Link from "next/link"
+import { useState } from "react"
 import { usePathname } from "next/navigation"
+import Link from "next/link"
 import { motion, AnimatePresence } from "framer-motion"
-import { Home, BookOpen, BarChart, Settings, Menu, ChevronLeft, ChevronRight, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
+import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Separator } from "@/components/ui/separator"
+import { Menu, ChevronLeft, ChevronRight, LogOut, Home, BookOpen, BarChart, Settings } from "lucide-react"
+import { useFirebase } from "@/contexts/FirebaseContext"
+import { signOut } from "firebase/auth"
+import { auth, db } from "@/lib/firebase"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import { doc, getDoc } from "firebase/firestore"
+import { useEffect } from "react"
 
 const menuItems = [
   { icon: Home, label: "Overview", href: "/dashboard" },
@@ -23,20 +30,47 @@ interface DashboardSidebarProps {
   toggleSidebar: () => void
 }
 
-export function DashboardSidebar({ isCollapsed, toggleSidebar }: DashboardSidebarProps) {
-  const pathname = usePathname()
+const DashboardSidebar = ({ isCollapsed, toggleSidebar }: DashboardSidebarProps) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [userData, setUserData] = useState<any>(null)
+  const pathname = usePathname()
+  const { user } = useFirebase()
+  const router = useRouter()
 
   useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth < 768) {
-        toggleSidebar()
+    const fetchUserData = async () => {
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", user.uid))
+          if (userDoc.exists()) {
+            setUserData(userDoc.data())
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error)
+        }
       }
     }
+    fetchUserData()
+  }, [user])
 
-    window.addEventListener("resize", handleResize)
-    return () => window.removeEventListener("resize", handleResize)
-  }, [toggleSidebar])
+  const handleLogout = async () => {
+    try {
+      await signOut(auth)
+      toast.success("Logged out successfully")
+      router.push("/sign-in")
+    } catch (error) {
+      console.error("Error logging out:", error)
+      toast.error("Failed to log out")
+    }
+  }
+
+  const getInitials = (name: string) => {
+    return name
+      ?.split(' ')
+      .map(word => word[0])
+      .join('')
+      .toUpperCase() || 'U'
+  }
 
   const sidebarVariants = {
     expanded: { width: 240 },
@@ -46,14 +80,14 @@ export function DashboardSidebar({ isCollapsed, toggleSidebar }: DashboardSideba
   return (
     <>
       <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
-        <SheetTrigger asChild>
-          <Button variant="ghost" size="icon" className="md:hidden fixed top-4 left-4 z-50">
-            <Menu />
+        <SheetTrigger asChild className="md:hidden">
+          <Button variant="ghost" size="icon" className="ml-2">
+            <Menu size={24} />
             <span className="sr-only">Toggle menu</span>
           </Button>
         </SheetTrigger>
         <SheetContent side="left" className="w-[240px] sm:w-[300px]">
-          <MobileMenu setIsMobileMenuOpen={setIsMobileMenuOpen} />
+          <MobileMenu setIsMobileMenuOpen={setIsMobileMenuOpen} userData={userData} />
         </SheetContent>
       </Sheet>
 
@@ -75,12 +109,12 @@ export function DashboardSidebar({ isCollapsed, toggleSidebar }: DashboardSideba
                 className="flex items-center gap-2"
               >
                 <Avatar>
-                  <AvatarImage src="/placeholder-avatar.jpg" alt="User" />
-                  <AvatarFallback>JD</AvatarFallback>
+                  <AvatarImage src={user?.photoURL || ""} alt={userData?.name || user?.displayName || "User"} />
+                  <AvatarFallback>{getInitials(userData?.name || user?.displayName || "User")}</AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col">
-                  <p className="font-semibold">John Doe</p>
-                  <p className="text-xs text-muted-foreground">john@example.com</p>
+                  <p className="font-semibold">{userData?.name || user?.displayName || "User"}</p>
+                  <p className="text-sm text-muted-foreground">{userData?.email || user?.email}</p>
                 </div>
               </motion.div>
             )}
@@ -96,7 +130,7 @@ export function DashboardSidebar({ isCollapsed, toggleSidebar }: DashboardSideba
           ))}
         </nav>
         <Separator className="my-2" />
-        <Button variant="ghost" className="justify-start gap-2">
+        <Button variant="ghost" className="justify-start gap-2" onClick={handleLogout}>
           <LogOut size={20} />
           <AnimatePresence>
             {!isCollapsed && (
@@ -154,19 +188,41 @@ function NavItem({ item, isActive, isCollapsed }) {
   )
 }
 
-function MobileMenu({ setIsMobileMenuOpen }) {
+function MobileMenu({ setIsMobileMenuOpen, userData }) {
   const pathname = usePathname()
+  const { user } = useFirebase()
+  const router = useRouter()
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth)
+      toast.success("Logged out successfully")
+      router.push("/sign-in")
+      setIsMobileMenuOpen(false)
+    } catch (error) {
+      console.error("Error logging out:", error)
+      toast.error("Failed to log out")
+    }
+  }
+
+  const getInitials = (name: string) => {
+    return name
+      ?.split(' ')
+      .map(word => word[0])
+      .join('')
+      .toUpperCase() || 'U'
+  }
 
   return (
     <nav className="flex flex-col gap-4 mt-4">
       <div className="flex items-center gap-2 mb-8">
         <Avatar>
-          <AvatarImage src="/placeholder-avatar.jpg" alt="User" />
-          <AvatarFallback>JD</AvatarFallback>
+          <AvatarImage src={user?.photoURL || ""} alt={userData?.name || user?.displayName || "User"} />
+          <AvatarFallback>{getInitials(userData?.name || user?.displayName || "User")}</AvatarFallback>
         </Avatar>
         <div>
-          <p className="font-semibold">John Doe</p>
-          <p className="text-sm text-muted-foreground">john@example.com</p>
+          <p className="font-semibold">{userData?.name || user?.displayName || "User"}</p>
+          <p className="text-sm text-muted-foreground">{userData?.email || user?.email}</p>
         </div>
       </div>
       <Separator className="my-2" />
@@ -184,11 +240,13 @@ function MobileMenu({ setIsMobileMenuOpen }) {
         </Link>
       ))}
       <Separator className="my-2" />
-      <Button variant="ghost" className="justify-start gap-2 mt-auto">
+      <Button variant="ghost" className="justify-start gap-2 mt-auto" onClick={handleLogout}>
         <LogOut size={20} />
         Logout
       </Button>
     </nav>
   )
 }
+
+export default DashboardSidebar
 

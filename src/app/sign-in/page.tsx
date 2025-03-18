@@ -8,18 +8,46 @@ import { Brain } from "lucide-react"
 import Link from "next/link"
 import { motion } from "framer-motion"
 import { useRouter } from "next/navigation"
+import { signInWithEmailAndPassword } from "firebase/auth"
+import { auth, db } from "@/lib/firebase"
+import { doc, getDoc } from "firebase/firestore"
+import { toast } from "sonner"
 
 export default function SignIn() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Here you would typically validate the credentials and make an API call
-    // For this example, we'll just redirect to the onboarding page for all users
-    // In a real application, you'd check if it's a first-time user
-    router.push("/onboarding")
+    setIsLoading(true)
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password)
+      
+      // Check if user has completed onboarding
+      const userDoc = await getDoc(doc(db, "users", userCredential.user.uid))
+      
+      if (userDoc.exists() && userDoc.data().learningGoal && userDoc.data().professionLevel) {
+        // User has completed onboarding, redirect to dashboard
+        router.push("/dashboard")
+      } else {
+        // User hasn't completed onboarding
+        router.push("/onboarding")
+      }
+      
+      toast.success("Signed in successfully!")
+    } catch (error: any) {
+      console.error("Error signing in:", error)
+      if (error.code === "auth/invalid-credential") {
+        toast.error("Invalid email or password")
+      } else {
+        toast.error("Failed to sign in. Please try again.")
+      }
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -60,8 +88,8 @@ export default function SignIn() {
               onChange={(e) => setPassword(e.target.value)}
             />
           </div>
-          <Button type="submit" className="w-full">
-            Sign In
+          <Button type="submit" className="w-full" disabled={isLoading}>
+            {isLoading ? "Signing in..." : "Sign In"}
           </Button>
         </form>
         <p className="mt-4 text-center text-sm">
