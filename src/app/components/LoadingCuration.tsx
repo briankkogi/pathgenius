@@ -7,7 +7,12 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { funQuotes } from "@/lib/constants"
 
-export default function LoadingCuration({ learningGoal }: { learningGoal: string }) {
+interface LoadingCurationProps {
+  learningGoal: string;
+  assessmentId?: string | null;
+}
+
+export default function LoadingCuration({ learningGoal, assessmentId }: LoadingCurationProps) {
   const [quoteIndex, setQuoteIndex] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const router = useRouter()
@@ -27,7 +32,12 @@ export default function LoadingCuration({ learningGoal }: { learningGoal: string
   }, [handleQuoteChange])
 
   const handleStartLearning = () => {
-    router.push(`/course/1?goal=${encodeURIComponent(learningGoal)}`)
+    // Include the assessment ID in the URL if available
+    const url = assessmentId 
+      ? `/course/1?goal=${encodeURIComponent(learningGoal)}&assessment=${assessmentId}`
+      : `/course/1?goal=${encodeURIComponent(learningGoal)}`
+    
+    router.push(url)
   }
 
   return (
@@ -43,7 +53,7 @@ export default function LoadingCuration({ learningGoal }: { learningGoal: string
   )
 }
 
-function LoadingContent({ quoteIndex }) {
+function LoadingContent({ quoteIndex }: { quoteIndex: number }) {
   return (
     <motion.div
       key="loading"
@@ -69,7 +79,7 @@ function LoadingContent({ quoteIndex }) {
   )
 }
 
-function CompletedContent({ learningGoal, onStartLearning }) {
+function CompletedContent({ learningGoal, onStartLearning }: { learningGoal: string, onStartLearning: () => void }) {
   return (
     <motion.div
       key="complete"

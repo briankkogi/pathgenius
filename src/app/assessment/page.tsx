@@ -210,6 +210,8 @@ export default function Assessment() {
           score: evalData.score,
           feedback: evalData.feedback,
           nextSteps: evalData.nextSteps,
+          strengths: evalData.strengths || [],
+          knowledgeGaps: evalData.knowledgeGaps || [],
           completedAt: new Date().toISOString(),
           userId: user.uid,
           sessionId: sessionId,
@@ -245,10 +247,13 @@ export default function Assessment() {
           score: evalData.score,
           feedback: evalData.feedback,
           nextSteps: evalData.nextSteps,
+          strengths: evalData.strengths || [],
+          knowledgeGaps: evalData.knowledgeGaps || [],
           assessmentId: assessmentRef.id
         });
 
-        router.push(`/loading-curation?goal=${encodeURIComponent(learningGoal)}`);
+        // Redirect to the assessment results page instead of loading-curation
+        router.push(`/assessment-results?id=${assessmentRef.id}`);
       } catch (error) {
         console.error("Error saving assessment:", error);
         toast.error("Failed to save assessment results");

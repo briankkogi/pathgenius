@@ -38,6 +38,22 @@ class AssessmentResponse(BaseModel):
     questions: List[AssessmentQuestion]
     sessionId: str
 
+class AssessmentSubmission(BaseModel):
+    sessionId: str
+    answers: Dict[str, str]
+
+class KnowledgeGap(BaseModel):
+    topic: str
+    description: str
+    recommendedResources: List[str]
+
+class AssessmentResult(BaseModel):
+    score: float
+    feedback: str
+    nextSteps: str
+    knowledgeGaps: Optional[List[KnowledgeGap]] = None
+    strengths: Optional[List[str]] = None
+
 # In-memory storage for assessment sessions
 assessment_sessions = {}
 
@@ -385,30 +401,18 @@ def cleanup_old_sessions():
     if expired_sessions:
         logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
 
-class AssessmentSubmission(BaseModel):
-    sessionId: str
-    answers: Dict[str, str]
-
-class AssessmentResult(BaseModel):
-    score: float
-    feedback: str
-    nextSteps: str
-
 @app.post("/api/evaluate-assessment", response_model=AssessmentResult)
 async def evaluate_assessment(submission: AssessmentSubmission):
-    """Evaluate a text-based assessment submission"""
+    """Evaluate a text-based assessment submission using AI assistance"""
     if submission.sessionId not in assessment_sessions:
         raise HTTPException(status_code=404, detail="Assessment session not found")
     
     session = assessment_sessions[submission.sessionId]
     
-    # For text-based answers, we'll provide general feedback based on completion
-    # since we can't truly evaluate the correctness automatically
-    
-    # Count how many questions were answered
+    # Basic completion calculation
     questions = session["questions"]
     total = len(questions)
-    answered = sum(1 for q_id in [str(q["id"]) for q in questions] if q_id in submission.answers and submission.answers[q_id].strip())
+    answered = sum(1 for q_id in [str(q["id"]) for q in questions] if q_id in submission.answers and submission.answers[q_id].strip() and submission.answers[q_id] != "Skipped")
     
     # Calculate a completion score
     completion_score = (answered / total) * 100 if total > 0 else 0
@@ -419,8 +423,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
     print("\n\033[94m=== ASSESSMENT SUBMISSION ===\033[0m")
     print(f"\033[96mLearning Goal:\033[0m {session['learningGoal']}")
     print(f"\033[96mProfession Level:\033[0m {session['professionLevel']}")
-    print(f"\033[96mCompletion Score:\033[0m {completion_score}%")
-    print("\n\033[94m=== STUDENT ANSWERS ===\033[0m")
     
     for q in questions:
         q_id = str(q["id"])
@@ -428,20 +430,177 @@ async def evaluate_assessment(submission: AssessmentSubmission):
         print(f"\033[96mQuestion {q_id}:\033[0m {q['question']}")
         print(f"\033[92mAnswer:\033[0m {answer}\n")
     
-    # Generate feedback based on the learningGoal and professionLevel
-    feedback = f"You've completed {answered} out of {total} questions on {session['learningGoal']}."
+    # Initialize variables for AI evaluation
+    knowledge_score = completion_score  # Default to completion score
+    detailed_feedback = ""
+    ai_next_steps = f"Focus on building your understanding of {session['learningGoal']} concepts through practice and application."
     
-    if completion_score == 100:
-        next_steps = f"Great job answering all questions about {session['learningGoal']}! Based on your responses, we'll create a personalized learning path tailored to a {session['professionLevel']} level."
-    elif completion_score >= 60:
-        next_steps = f"You've made a good start with {session['learningGoal']}. We'll use your responses to create a learning path that builds on your knowledge, considering your {session['professionLevel']} background."
-    else:
-        next_steps = f"We'll create a learning plan for {session['learningGoal']} starting with fundamentals suitable for someone at a {session['professionLevel']} level."
+    if answered > 0:
+        try:
+            # Create a simplified prompt focused on just score and feedback
+            eval_prompt = f"""
+            You are an educational assessment expert evaluating a student's knowledge of {session['learningGoal']}. 
+            The student is at a {session['professionLevel']} level.
+            
+            You will analyze the student's answers and provide a concise evaluation.
+            
+            IMPORTANT: Always speak directly to the student using "you" (not "they" or "the student").
+            
+            Here are the student's answers:
+            """
+            
+            # Add only the answered questions to the prompt
+            for q in questions:
+                q_id = str(q["id"])
+                if q_id in submission.answers and submission.answers[q_id].strip() and submission.answers[q_id] != "Skipped":
+                    question = q["question"]
+                    answer = submission.answers[q_id]
+                    eval_prompt += f"\nQuestion: {question}\nAnswer: {answer}\n"
+            
+            # Instructions for structured output with very explicit JSON formatting
+            eval_prompt += """
+            First, analyze the student's answers in a thinking section. Use <think></think> tags:
+
+            <think>
+            [Your detailed analysis of the student's knowledge]
+            </think>
+
+            IMMEDIATELY AFTER your thinking section, provide ONLY a COMPLETE, PROPERLY FORMATTED JSON object.
+            
+            Use this EXACT JSON format without any deviations:
+            {
+              "knowledgeScore": 75,
+              "feedback": "Overall assessment of your understanding including strengths and areas for improvement",
+              "nextSteps": "Clear recommendations for what you should learn next"
+            }
+
+            EXTREMELY IMPORTANT JSON FORMATTING RULES:
+            1. Use double quotes (") for ALL strings and property names - NEVER use single quotes (')
+            2. Ensure ALL property names DO NOT contain periods or special characters
+            3. Each property must be followed by a colon (:)
+            4. Each property-value pair must end with a comma (,) EXCEPT the last item
+            5. Address the student directly using "you" not "they" or "the student"
+            6. Provide detailed feedback that includes strengths and areas for improvement
+            7. Keep the structure simple - ONLY include knowledgeScore, feedback, and nextSteps
+
+            The JSON object MUST be valid and parseable with NO syntax errors.
+            """
+            
+            print("\n\033[94m=== EVALUATION PROMPT ===\033[0m")
+            print(f"\033[95m{eval_prompt}\033[0m")
+            print("\n\033[94m=== REQUESTING AI EVALUATION ===\033[0m")
+            
+            # Make the request to the model for evaluation
+            async with httpx.AsyncClient(timeout=240.0) as client:  # Extended timeout
+                ai_response = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": "deepseek-r1:1.5b",
+                        "prompt": eval_prompt,
+                        "stream": False,
+                        "temperature": 0.1,
+                        "max_tokens": 4000  # Increased token limit
+                    }
+                )
+                
+                if ai_response.status_code != 200:
+                    print(f"\033[91mAI Evaluation Error: {ai_response.status_code}\033[0m")
+                    raise HTTPException(status_code=500, detail="Model failed to evaluate the assessment")
+                
+                result = ai_response.json()
+                content = result.get("response", "")
+                
+                # Print the FULL response for debugging
+                print("\n\033[94m=== FULL AI EVALUATION RESPONSE ===\033[0m")
+                print(f"\033[92m{content}\033[0m")
+                
+                # Extract JSON from the response
+                try:
+                    # First, remove the thinking section if present
+                    content_without_thinking = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+                    
+                    # Try to find JSON content - look for matching braces
+                    json_match = re.search(r'({[\s\S]*?"knowledgeScore"[\s\S]*?})', content_without_thinking, re.DOTALL)
+                    
+                    # If not found, try with more relaxed pattern
+                    if not json_match:
+                        json_match = re.search(r'({[\s\S]*})', content_without_thinking, re.DOTALL)
+                        
+                    if json_match:
+                        json_str = json_match.group(1)
+                        print("\n\033[94m=== EXTRACTED JSON STRING ===\033[0m")
+                        print(f"\033[92m{json_str}\033[0m")
+                        
+                        # Normalize and clean the JSON string
+                        json_str = json_str.replace("'", '"')  # Replace single quotes with double quotes
+                        json_str = re.sub(r'"([^"]+)\.\s*":', r'"\1":', json_str)  # Remove periods in property names
+                        json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas
+                        
+                        try:
+                            ai_eval_data = json.loads(json_str)
+                            
+                            # Extract knowledge score
+                            if "knowledgeScore" in ai_eval_data and isinstance(ai_eval_data["knowledgeScore"], (int, float)):
+                                knowledge_score = float(ai_eval_data["knowledgeScore"])
+                                knowledge_score = max(0, min(100, knowledge_score))
+                                print(f"\033[96mKnowledge Score:\033[0m {knowledge_score}%")
+                            
+                            # Process feedback
+                            if "feedback" in ai_eval_data and isinstance(ai_eval_data["feedback"], str):
+                                detailed_feedback = ai_eval_data["feedback"]
+                            
+                            # Process next steps
+                            if "nextSteps" in ai_eval_data and isinstance(ai_eval_data["nextSteps"], str):
+                                ai_next_steps = ai_eval_data["nextSteps"]
+                            
+                        except json.JSONDecodeError as e:
+                            print(f"\033[91mJSON decode error: {str(e)}\033[0m")
+                            
+                            # Extract individual fields using regex
+                            score_match = re.search(r'"knowledgeScore"[^0-9]*([0-9.]+)', json_str)
+                            knowledge_score = float(score_match.group(1)) if score_match else completion_score
+                            
+                            feedback_match = re.search(r'"feedback"\s*:\s*"([^"]+)"', json_str)
+                            detailed_feedback = feedback_match.group(1) if feedback_match else f"You've completed {answered} out of {total} questions on {session['learningGoal']}. Your knowledge score is {knowledge_score:.0f}%."
+                            
+                            next_steps_match = re.search(r'"nextSteps"\s*:\s*"([^"]+)"', json_str)
+                            ai_next_steps = next_steps_match.group(1) if next_steps_match else f"Continue learning about {session['learningGoal']}."
+                    else:
+                        print("\033[91mNo JSON object found in the model response\033[0m")
+                        raise ValueError("No JSON object found in the model response")
+                                
+                except Exception as e:
+                    print(f"\033[91mError extracting and processing JSON: {str(e)}\033[0m")
+                    raise HTTPException(status_code=500, detail=f"Failed to process AI evaluation: {str(e)}")
+        
+        except Exception as e:
+            print(f"\033[91mEvaluation error: {str(e)}\033[0m")
+            raise HTTPException(status_code=500, detail=f"Assessment evaluation failed: {str(e)}")
     
+    # Ensure we have at least some data for a valid response
+    if not detailed_feedback:
+        detailed_feedback = f"You've completed {answered} out of {total} questions on {session['learningGoal']}. Your knowledge score is {knowledge_score:.0f}%."
+    
+    if not ai_next_steps:
+        ai_next_steps = f"Focus on building your understanding of {session['learningGoal']} concepts through practice and application."
+    
+    # Store AI evaluation in the session - with empty strengths and knowledge gaps
+    session["aiEvaluation"] = {
+        "strengths": [],
+        "knowledgeGaps": [],
+        "detailedFeedback": detailed_feedback,
+        "aiNextSteps": ai_next_steps,
+        "knowledgeScore": knowledge_score,
+        "evaluatedAt": time.time()
+    }
+    
+    # Return the evaluation with empty strengths and knowledge gaps arrays
     return {
-        "score": completion_score,
-        "feedback": feedback,
-        "nextSteps": next_steps
+        "score": knowledge_score,
+        "feedback": detailed_feedback,
+        "nextSteps": ai_next_steps,
+        "knowledgeGaps": [],
+        "strengths": []
     }
 
 @app.get("/api/health")
