@@ -26,17 +26,8 @@ export default function SignIn() {
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password)
       
-      // Check if user has completed onboarding
-      const userDoc = await getDoc(doc(db, "users", userCredential.user.uid))
-      
-      if (userDoc.exists() && userDoc.data().learningGoal && userDoc.data().professionLevel) {
-        // User has completed onboarding, redirect to dashboard
-        router.push("/dashboard")
-      } else {
-        // User hasn't completed onboarding
-        router.push("/onboarding")
-      }
-      
+      // Always redirect signed-in users to dashboard
+      router.push("/dashboard")
       toast.success("Signed in successfully!")
     } catch (error: any) {
       console.error("Error signing in:", error)

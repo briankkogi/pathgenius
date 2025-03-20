@@ -43,7 +43,8 @@ export default function Onboarding() {
         if (user && !isAddCourse) {
           // Check if user already has preferences
           const userDoc = await getDoc(doc(db, "users", user.uid))
-          if (userDoc.exists() && userDoc.data().learningGoal && userDoc.data().professionLevel) {
+          if (userDoc.exists() && userDoc.data().initialLearningGoal) {
+            // User has already completed onboarding, redirect to dashboard
             router.push("/dashboard")
             return
           }
