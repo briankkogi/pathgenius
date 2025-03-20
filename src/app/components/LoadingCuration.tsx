@@ -6,6 +6,9 @@ import { Loader2, BookOpen } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { funQuotes } from "@/lib/constants"
+import { useFirebase } from "@/contexts/FirebaseContext"
+import { doc, collection, setDoc } from "firebase/firestore"
+import { db } from "@/lib/firebase"
 
 interface LoadingCurationProps {
   learningGoal: string;
@@ -15,7 +18,9 @@ interface LoadingCurationProps {
 export default function LoadingCuration({ learningGoal, assessmentId }: LoadingCurationProps) {
   const [quoteIndex, setQuoteIndex] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
+  const [courseId, setCourseId] = useState<string | null>(null)
   const router = useRouter()
+  const { user } = useFirebase()
 
   const handleQuoteChange = useCallback(() => {
     setQuoteIndex((prevIndex) => (prevIndex + 1) % funQuotes.length)
@@ -23,18 +28,72 @@ export default function LoadingCuration({ learningGoal, assessmentId }: LoadingC
 
   useEffect(() => {
     const quoteInterval = setInterval(handleQuoteChange, 5000)
-    const loadingTimeout = setTimeout(() => setIsLoading(false), 15000)
-
+    
+    // Don't automatically end loading - wait for course generation
+    
     return () => {
       clearInterval(quoteInterval)
-      clearTimeout(loadingTimeout)
     }
   }, [handleQuoteChange])
 
+  useEffect(() => {
+    const generateCourse = async () => {
+      if (!user) return
+      
+      try {
+        // Call our new FastAPI endpoint to generate a course
+        const response = await fetch('http://localhost:8000/api/curate-course', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            learningGoal,
+            professionLevel: "beginner", // Default to beginner if not available
+            userId: user.uid,
+            assessmentId
+          })
+        })
+        
+        if (!response.ok) {
+          throw new Error("Failed to generate course")
+        }
+        
+        const data = await response.json()
+        
+        // Save course to Firebase
+        const courseRef = doc(collection(db, "courses"))
+        await setDoc(courseRef, {
+          userId: user.uid,
+          courseId: data.courseId,
+          title: data.title,
+          modules: data.modules,
+          learningGoal,
+          createdAt: new Date().toISOString(),
+          progress: 0
+        })
+        
+        // Set courseId for redirection
+        setCourseId(courseRef.id)
+        
+        // End loading after course is generated and saved
+        setIsLoading(false)
+      } catch (error) {
+        console.error("Error generating course:", error)
+        // End loading even if there's an error
+        setIsLoading(false)
+      }
+    }
+    
+    if (user) {
+      generateCourse()
+    }
+  }, [user, learningGoal, assessmentId])
+
   const handleStartLearning = () => {
-    // Include the assessment ID in the URL if available
-    const url = assessmentId 
-      ? `/course/1?goal=${encodeURIComponent(learningGoal)}&assessment=${assessmentId}`
+    // Use the Firebase document ID of the course
+    const url = courseId 
+      ? `/course/${courseId}?goal=${encodeURIComponent(learningGoal)}&assessment=${assessmentId || ''}`
       : `/course/1?goal=${encodeURIComponent(learningGoal)}`
     
     router.push(url)

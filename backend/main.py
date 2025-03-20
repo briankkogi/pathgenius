@@ -54,6 +54,31 @@ class AssessmentResult(BaseModel):
     knowledgeGaps: Optional[List[KnowledgeGap]] = None
     strengths: Optional[List[str]] = None
 
+# New models for course curation
+class CurationRequest(BaseModel):
+    learningGoal: str
+    professionLevel: str
+    userId: str
+    assessmentId: Optional[str] = None
+    strengths: Optional[List[str]] = None
+    knowledgeGaps: Optional[List[Dict[str, Any]]] = None
+
+class CourseModule(BaseModel):
+    id: int
+    title: str
+    type: str
+    duration: str
+    description: str
+    videoId: Optional[str] = None
+    content: Optional[str] = None
+    progress: int = 0
+
+class CourseResponse(BaseModel):
+    courseId: str
+    title: str
+    modules: List[CourseModule]
+    createdAt: str
+
 # In-memory storage for assessment sessions
 assessment_sessions = {}
 
@@ -65,6 +90,9 @@ processing_requests = set()
 
 # Synchronization lock to prevent multiple identical requests
 request_locks = {}
+
+# In-memory storage for curated courses
+curated_courses = {}
 
 @app.post("/api/generate-assessment", response_model=AssessmentResponse)
 async def generate_assessment(request: AssessmentRequest):
@@ -609,6 +637,606 @@ async def health_check():
     # Clean up old sessions when health check is called
     cleanup_old_sessions()
     return {"status": "ok", "timestamp": time.time()}
+
+@app.post("/api/curate-course", response_model=CourseResponse)
+async def curate_course(request: CurationRequest):
+    """Generate a curated learning path based on assessment results"""
+    try:
+        # Check if the user already has a course for this learning goal
+        user_id = request.userId
+        learning_goal = request.learningGoal
+        request_key = f"{user_id}_{learning_goal}_course"
+        
+        # Create a unique course ID
+        course_id = f"course_{user_id}_{int(time.time())}"
+        
+        # Get assessment session if provided
+        assessment_data = {}
+        if request.assessmentId and request.assessmentId in assessment_sessions:
+            assessment_data = assessment_sessions[request.assessmentId]
+        
+        # Use a detailed prompt for course curation with improved content generation
+        prompt = f"""
+        You are an educational content curator specializing in creating personalized learning paths. 
+        Your task is to create a structured course for a student learning {learning_goal} at a {request.professionLevel} level.
+        
+        Create exactly 5 modules that form a coherent learning path. Each module should have:
+        1. A clear title and description
+        2. Multiple topics within each module (2-3 topics per module) with video and article content
+        3. A quiz section with 2-3 multiple choice questions for each module
+        
+        {f"Based on their assessment, they have these knowledge gaps: {request.knowledgeGaps}" if request.knowledgeGaps else ""}
+        {f"Their strengths are: {request.strengths}" if request.strengths else ""}
+        
+        Guidelines:
+        - For videos, find actual educational YouTube videos that teach the specific topic
+        - Provide REAL YouTube video IDs (the part after v= in YouTube URLs, e.g., "dQw4w9WgXcQ")
+        - Make sure videos are appropriate for the user's level ({request.professionLevel})
+        - Write detailed notes for each video that summarize key points
+        - Each article should have comprehensive markdown content (minimum 300 words)
+        - Include accurate durations for all content items
+        - Each quiz should have 2-3 well-crafted multiple choice questions with one correct answer
+        
+        Format your response EXACTLY as a valid JSON object with this structure:
+        {{
+          "title": "Complete Course Title",
+          "modules": [
+            {{
+              "id": 1,
+              "title": "Module Title",
+              "description": "Detailed module description",
+              "type": "mixed",
+              "duration": "XX minutes",
+              "progress": 0,
+              "topics": [
+                {{
+                  "id": "1-1",
+                  "title": "First Topic Title",
+                  "type": "video",
+                  "duration": "XX minutes",
+                  "videoId": "ACTUAL_YOUTUBE_ID",
+                  "notes": "Detailed notes about this video that summarize key points..."
+                }},
+                {{
+                  "id": "1-2",
+                  "title": "Second Topic Title",
+                  "type": "article",
+                  "duration": "XX minutes read",
+                  "content": "Full markdown content here with multiple paragraphs, lists, etc."
+                }}
+              ],
+              "quiz": [
+                {{
+                  "question": "A multiple choice question about the module content?",
+                  "options": [
+                    "Option 1",
+                    "Option 2",
+                    "Option 3",
+                    "Option 4"
+                  ],
+                  "correctAnswer": 0
+                }},
+                {{
+                  "question": "Another question?",
+                  "options": [
+                    "Option 1",
+                    "Option 2",
+                    "Option 3", 
+                    "Option 4"
+                  ],
+                  "correctAnswer": 2
+                }}
+              ]
+            }}
+            // Repeat for all 5 modules
+          ]
+        }}
+        
+        Be extremely detailed in the content. Write comprehensive explanations and tutorials in the markdown content.
+        Do not skimp on the content length. Be thorough and educational.
+        
+        VERY IMPORTANT:
+        1. Only use double quotes, not single quotes
+        2. Include 5 modules, each with 2-3 topics
+        3. Include 2-3 quiz questions per module
+        4. For videos, include REAL YouTube IDs that teach the topic
+        5. Do not include any text outside the JSON structure
+        """
+        
+        # Make the request to Ollama with increased temperature for creativity
+        async with httpx.AsyncClient(timeout=300.0) as client:  # Increased timeout
+            logger.info(f"Requesting course curation for {learning_goal}")
+            
+            response = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": "deepseek-r1:1.5b",
+                    "prompt": prompt,
+                    "stream": False,
+                    "temperature": 0.9,  # Increased temperature for more detail and creativity
+                    "max_tokens": 12000,  # Increased token limit for more content
+                }
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Ollama API Error: {response.status_code}")
+                raise HTTPException(status_code=500, detail=f"Failed to connect to Ollama: {response.status_code}")
+            
+            # Process model response
+            result = response.json()
+            content = result.get("response", "")
+            
+            logger.info("Received course curation response from model")
+            
+            # Attempt to extract JSON
+            try:
+                # Clean up the response to ensure valid JSON
+                json_match = re.search(r'({[\s\S]*})', content, re.DOTALL)
+                
+                if not json_match:
+                    logger.error("No JSON content found in response")
+                    raise HTTPException(status_code=500, detail="Failed to generate course structure")
+                
+                json_str = json_match.group(1)
+                
+                # More aggressive JSON cleaning
+                json_str = json_str.replace("'", '"')  # Replace single quotes with double quotes
+                json_str = re.sub(r'//.*?(\n|$)', '\n', json_str)  # Remove JavaScript-style comments
+                json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas in objects
+                json_str = re.sub(r',\s*]', ']', json_str)  # Remove trailing commas in arrays
+                
+                # Try to parse the cleaned JSON
+                try:
+                    course_data = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error: {str(e)}")
+                    logger.info(f"Attempting to fix malformed JSON: {json_str[:100]}...")
+                    
+                    # More aggressive fixing for common JSON errors
+                    # Fix missing quotes around property names
+                    json_str = re.sub(r'([{,]\s*)([a-zA-Z0-9_]+)(\s*:)', r'\1"\2"\3', json_str)
+                    
+                    # Fix unescaped quotes in strings
+                    json_str = re.sub(r'(?<!")(".*?[^\\]")(?!")', r'"\1"', json_str)
+                    
+                    try:
+                        course_data = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # If still failing, create an emergency course structure
+                        logger.error("Could not fix JSON, creating fallback course structure")
+                        course_data = create_detailed_fallback_course(learning_goal, request.professionLevel)
+                
+                # Include fallback content generator if parsing fails
+                if not isinstance(course_data, dict) or "modules" not in course_data:
+                    logger.warning("Invalid course structure, creating detailed fallback")
+                    course_data = create_detailed_fallback_course(learning_goal, request.professionLevel)
+                    
+                # Update the modules processing to ensure topics and quizzes
+                modules = course_data.get("modules", [])
+                
+                # Make sure we have exactly 5 modules
+                if len(modules) < 5:
+                    # Pad with detailed modules
+                    while len(modules) < 5:
+                        module_index = len(modules) + 1
+                        new_module = create_detailed_module(learning_goal, module_index)
+                        modules.append(new_module)
+                
+                modules = modules[:5]  # Limit to 5 modules
+                
+                # Process and normalize each module
+                for i, module in enumerate(modules):
+                    module["id"] = i + 1
+                    
+                    # Ensure required fields
+                    if "type" not in module:
+                        module["type"] = "mixed"
+                    
+                    if "progress" not in module:
+                        module["progress"] = 0
+                    
+                    if "description" not in module:
+                        module["description"] = f"Learn about {module['title']} in this comprehensive module"
+                    
+                    # Ensure topics exist and are properly formed
+                    if "topics" not in module or not isinstance(module["topics"], list) or len(module["topics"]) < 2:
+                        module["topics"] = create_module_topics(module["title"], learning_goal, i+1)
+                    
+                    # Ensure quiz exists and is properly formed
+                    if "quiz" not in module or not isinstance(module["quiz"], list) or len(module["quiz"]) < 2:
+                        module["quiz"] = create_module_quiz(module["title"], learning_goal)
+                
+                # Store the course data
+                course_response = {
+                    "courseId": course_id,
+                    "title": course_data.get("title", f"Comprehensive {learning_goal} Course"),
+                    "modules": modules,
+                    "createdAt": time.time()
+                }
+                
+                # Save in memory
+                curated_courses[course_id] = course_response
+                
+                return {
+                    "courseId": course_id,
+                    "title": course_response["title"],
+                    "modules": course_response["modules"],
+                    "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                }
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to parse course structure: {str(e)}")
+            except Exception as e:
+                logger.error(f"Unexpected error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error generating course: {str(e)}")
+                
+    except Exception as e:
+        logger.error(f"Course curation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/course/{course_id}")
+async def get_course(course_id: str):
+    """Retrieve a curated course by ID"""
+    if course_id not in curated_courses:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    return curated_courses[course_id]
+
+# Add these helper functions near the end of the file
+def create_detailed_fallback_course(learning_goal, profession_level):
+    """Create a detailed fallback course structure if parsing fails"""
+    
+    course = {
+        "title": f"Comprehensive {learning_goal} Course for {profession_level}s",
+        "modules": []
+    }
+    
+    # Generate 5 detailed modules
+    for i in range(1, 6):
+        course["modules"].append(create_detailed_module(learning_goal, i))
+    
+    return course
+
+def create_detailed_module(learning_goal, module_index):
+    """Create a detailed module with topics and quiz"""
+    
+    # Define module templates based on index
+    module_templates = [
+        {
+            "title": f"Introduction to {learning_goal}",
+            "description": f"Learn the fundamentals and core concepts of {learning_goal}."
+        },
+        {
+            "title": f"Essential {learning_goal} Techniques",
+            "description": f"Master the essential techniques and methods used in {learning_goal}."
+        },
+        {
+            "title": f"Intermediate {learning_goal} Concepts",
+            "description": f"Build on the basics and learn more complex concepts in {learning_goal}."
+        },
+        {
+            "title": f"Advanced {learning_goal} Applications",
+            "description": f"Apply your knowledge to real-world problems and advanced scenarios."
+        },
+        {
+            "title": f"Mastering {learning_goal}: Best Practices",
+            "description": f"Learn best practices, optimization techniques, and professional workflows."
+        }
+    ]
+    
+    # Use the appropriate template or fallback to generic
+    template_index = min(module_index - 1, len(module_templates) - 1)
+    template = module_templates[template_index]
+    
+    # Create the module
+    module = {
+        "id": module_index,
+        "title": template["title"],
+        "description": template["description"],
+        "type": "mixed",
+        "duration": f"{30 + module_index * 10} minutes",
+        "progress": 0,
+        "topics": create_module_topics(template["title"], learning_goal, module_index),
+        "quiz": create_module_quiz(template["title"], learning_goal)
+    }
+    
+    return module
+
+def create_module_topics(module_title, learning_goal, module_index):
+    """Create detailed topics for a module"""
+    
+    # Topic templates for different module positions
+    if module_index == 1:  # Introduction module
+        topics = [
+            {
+                "id": f"{module_index}-1",
+                "title": f"What is {learning_goal}?",
+                "type": "video",
+                "duration": "10 minutes",
+                "videoId": find_topic_video(f"introduction to {learning_goal}", module_index),
+                "notes": f"""
+                This video provides a comprehensive introduction to {learning_goal}.
+                
+                Key points covered:
+                - Definition and scope of {learning_goal}
+                - Historical development and context
+                - Why {learning_goal} is important in today's world
+                - Overview of fundamental concepts
+                - Examples of {learning_goal} in real-world applications
+                
+                After watching this video, you'll have a solid understanding of what {learning_goal} entails and why it's worth studying.
+                """
+            },
+            {
+                "id": f"{module_index}-2",
+                "title": f"Core Principles of {learning_goal}",
+                "type": "article",
+                "duration": "15 minutes read",
+                "content": f"""
+                # Core Principles of {learning_goal}
+                
+                In this article, we'll explore the fundamental principles that form the foundation of {learning_goal}. Understanding these principles is essential for mastering more advanced concepts later in the course.
+                
+                ## Foundational Concepts
+                
+                {learning_goal} is built on several key principles that guide its application and development. These principles include:
+                
+                1. **First Principle**: The foundation of all {learning_goal} practices begins with understanding this core concept.
+                   - How it works: This principle operates by establishing a framework for approaching problems.
+                   - Why it matters: Without this principle, the entire field would lack coherence and direction.
+                
+                2. **Second Principle**: Building on the first principle, this concept extends our understanding.
+                   - Key applications: This principle is applied when working with complex systems or problems.
+                   - Historical context: This principle emerged as the field evolved to address new challenges.
+                
+                3. **Third Principle**: This principle completes the foundational triad of {learning_goal}.
+                   - Relationship to other principles: This works in conjunction with the first two principles.
+                   - Modern interpretations: How this principle has evolved in contemporary practice.
+                
+                ## Practical Applications
+                
+                The principles of {learning_goal} are not merely theoretical constructs but have practical applications in various domains:
+                
+                * **Industry Application**: How these principles are applied in professional settings
+                * **Research Directions**: Current research areas that build upon these foundations
+                * **Everyday Examples**: How you might encounter these principles in daily life
+                
+                ## Getting Started
+                
+                To begin applying these principles, try these starter exercises:
+                
+                1. Identify examples of the first principle in action in your own experience
+                2. Compare and contrast the second and third principles
+                3. Create a simple project that incorporates all three principles
+                
+                ## Conclusion
+                
+                These core principles form the foundation upon which all {learning_goal} knowledge is built. In the next topics, we'll explore how to apply these principles to solve real-world problems and develop more advanced skills.
+                """
+            },
+            {
+                "id": f"{module_index}-3",
+                "title": f"Getting Started with {learning_goal}",
+                "type": "video",
+                "duration": "12 minutes",
+                "videoId": find_topic_video(f"getting started with {learning_goal}", module_index + 10),
+                "notes": f"""
+                This video walks you through the first steps of working with {learning_goal}.
+                
+                Key points covered:
+                - Setting up your environment for {learning_goal}
+                - Essential tools and resources you'll need
+                - First exercises to practice your skills
+                - Common beginner mistakes and how to avoid them
+                - Next steps after completing this module
+                
+                After watching this tutorial, you'll be ready to start practicing {learning_goal} on your own.
+                """
+            }
+        ]
+    else:  # Other modules
+        # Generate topic titles based on module index
+        topic_titles = [
+            f"Advanced Concept {(module_index-1)*2 + 1} in {learning_goal}",
+            f"Practical Applications of {learning_goal} - Part {module_index}",
+            f"Problem Solving with {learning_goal} Techniques"
+        ]
+        
+        topics = [
+            {
+                "id": f"{module_index}-1",
+                "title": topic_titles[0],
+                "type": "video",
+                "duration": f"{8 + module_index} minutes",
+                "videoId": find_topic_video(topic_titles[0], module_index * 3),
+                "notes": f"""
+                This video explores advanced concepts in {learning_goal} that build on the foundation you've already established.
+                
+                Key points covered:
+                - Detailed explanation of {topic_titles[0]}
+                - How this concept connects to previous modules
+                - Step-by-step demonstrations
+                - Expert tips for mastering this concept
+                - Common challenges and solutions
+                
+                These advanced techniques will significantly enhance your capabilities in {learning_goal}.
+                """
+            },
+            {
+                "id": f"{module_index}-2",
+                "title": topic_titles[1],
+                "type": "article",
+                "duration": "20 minutes read",
+                "content": f"""
+                # {topic_titles[1]}
+                
+                In this article, we'll explore practical applications of {learning_goal} that demonstrate how the concepts you've learned can be applied to real-world situations.
+                
+                ## Real-World Applications
+                
+                {learning_goal} has numerous applications across different industries and domains. Here are some key examples:
+                
+                ### Application Area 1
+                
+                One of the most significant applications of {learning_goal} is in this first area. This involves:
+                
+                - Using {learning_goal} to solve specific problems in this domain
+                - How professionals in this field leverage these techniques
+                - Case studies of successful implementations
+                - Tools and frameworks commonly used
+                
+                For example, a typical workflow might look like this:
+                
+                1. Identify the problem that needs solving
+                2. Apply the principles from Module {module_index-1}
+                3. Implement the solution using techniques covered in this module
+                4. Evaluate results and refine the approach
+                
+                ### Application Area 2
+                
+                Another important application domain includes:
+                
+                - Specific challenges in this area that {learning_goal} helps address
+                - Adaptations of core techniques for this specific domain
+                - Integration with other systems or methodologies
+                - Performance considerations and optimization strategies
+                
+                ## Hands-On Project
+                
+                To reinforce your understanding, try completing this hands-on project:
+                
+                1. **Project Goal**: Create a solution that addresses a specific problem using {learning_goal}
+                2. **Requirements**:
+                   - Apply at least two techniques covered in this module
+                   - Document your process and decisions
+                   - Evaluate the effectiveness of your solution
+                3. **Extension Ideas**:
+                   - Try alternative approaches and compare results
+                   - Scale your solution to handle larger inputs
+                   - Optimize for better performance
+                
+                ## Best Practices
+                
+                When applying {learning_goal} in real-world scenarios, keep these best practices in mind:
+                
+                - Always start by clearly defining the problem
+                - Choose the right technique for the specific situation
+                - Test your solutions thoroughly
+                - Document your approach and results
+                - Continuously refine and improve your implementation
+                
+                ## Next Steps
+                
+                After mastering these practical applications, you'll be ready to:
+                
+                - Take on more complex problems
+                - Combine multiple techniques for more sophisticated solutions
+                - Develop your own custom approaches based on core principles
+                
+                In the next topic, we'll explore problem-solving strategies that will further enhance your skills.
+                """
+            },
+            {
+                "id": f"{module_index}-3",
+                "title": topic_titles[2],
+                "type": "video",
+                "duration": f"{10 + module_index * 2} minutes",
+                "videoId": find_topic_video(topic_titles[2], module_index * 5),
+                "notes": f"""
+                This video demonstrates how to approach and solve problems using {learning_goal} techniques.
+                
+                Key points covered:
+                - Problem-solving framework specific to {learning_goal}
+                - Analysis of complex examples
+                - Step-by-step walkthrough of solving challenging problems
+                - Common pitfalls and how to avoid them
+                - Strategies for approaching unfamiliar problems
+                
+                After completing this video, you'll have stronger problem-solving skills that you can apply to a wide range of {learning_goal} challenges.
+                """
+            }
+        ]
+    
+    return topics
+
+def create_module_quiz(module_title, learning_goal):
+    """Create a quiz for a module"""
+    
+    # Generic quiz questions can be customized based on the learning goal
+    quiz = [
+        {
+            "question": f"Which of the following is a key principle of {learning_goal}?",
+            "options": [
+                f"The fundamental concept that defines {learning_goal}",
+                f"A concept unrelated to {learning_goal}",
+                f"A technique from a different field entirely",
+                f"None of the above"
+            ],
+            "correctAnswer": 0
+        },
+        {
+            "question": f"What is the best approach when applying {learning_goal} to solve a problem?",
+            "options": [
+                "Skip the planning phase and start implementing immediately",
+                "Use the most complex technique available regardless of the problem",
+                "Analyze the problem, choose appropriate techniques, and test the solution",
+                "Always use the exact same approach for all problems"
+            ],
+            "correctAnswer": 2
+        },
+        {
+            "question": f"Which of these is NOT typically associated with {learning_goal}?",
+            "options": [
+                "Structured problem-solving",
+                "Application of core principles",
+                "Random guessing without methodology",
+                "Continuous learning and improvement"
+            ],
+            "correctAnswer": 2
+        }
+    ]
+    
+    return quiz
+
+def find_topic_video(topic, seed):
+    """Find an appropriate YouTube video ID for a topic"""
+    
+    # Map of common topics to actual YouTube video IDs
+    video_map = {
+        "programming": ["fKl2JW_qrso", "JJmcL1N2KQs", "zOjov-2OZ0E", "bJzb-RuUcMU"],
+        "python": ["kqtD5dpn9C8", "rfscVS0vtbw", "8DvywoWv6fI", "f79MRyMsjrQ"],
+        "javascript": ["W6NZfCO5SIk", "PkZNo7MFNFg", "jS4aFq5-91M", "hdI2bqOjy3c"],
+        "web development": ["UB1O30fR-EE", "5YDVJaItmaY", "gXLjWRteuWI", "qz0aGYrrlhU"],
+        "data science": ["ua-CiDNNj30", "JL_grPfXcT4", "N6BghzuFLIg", "EF_1Ixm8TZM"],
+        "machine learning": ["7eh4d6sabA0", "ukzFI9rgwfU", "i_LwzRVP7bg", "aircAruvnKk"],
+        "artificial intelligence": ["kWmX3pd1f10", "mJeNghZXtMo", "fygRgiiqrgM", "oV74Najm6Nc"],
+        "algorithms": ["kPRA0W1kECg", "zO_EXPwqbXk", "oruBLhAsDoc", "P3YpTkHLL0c"],
+        "data structures": ["zg9ih6SVACc", "DuDz6B4cqVc", "B31LgI4Y4DQ", "9rhT3P1eOck"],
+        "cybersecurity": ["inWWhr5tnEA", "bPVaOlJ6ln0", "3NM_b9OzHmM", "U_P23SqJaDc"],
+        "blockchain": ["SSo_EIwHSd4", "qOVAbKKSH10", "bBC-nXj3Ng4", "IhJ509WL66Q"],
+        "game development": ["Bg5GwioYt7I", "vFjXKOXdgGo", "AfTja-ZLLRQ", "yxnH8fqf9wI"],
+        "mobile app development": ["TN8xZ64ibB0", "0-S5a0eXPoc", "SR6zDlbZozg", "fgdpvwEWJ9M"],
+        "database": ["HXV3zeQKqGY", "7S_tz1z_5bA", "lpWIJgdM9co", "4cWkVbC2bfE"],
+        "cloud computing": ["M988_fsOSWo", "IDLrwkBg3Bc", "b4P4adPgrqY", "1pBuwKwaHp0"],
+        "devops": ["Wvf0mBNGjXY", "S0RTiI7iH7A", "Y-KD0I_h1GI", "0yWAtQ6wYNc"],
+        "frontend": ["8gNrZ4lAnAw", "mU6anWqZJcc", "uK-zIOGi3j4", "zJSY8tbf_ys"],
+        "backend": ["XBu54nfzxAQ", "TlB_eWDSMt4", "WpA-S5gX61s", "zaCJffoFfC4"],
+        # Fallback/generic videos for other topics
+        "default": ["1GWpC0lywZs", "ZWI4_gDdHRE", "YG_-3XAr1CA", "C72WkcUZvco"]
+    }
+    
+    # Extract key terms from the topic
+    topic_lower = topic.lower()
+    
+    # Try to find a matching video
+    for key, videos in video_map.items():
+        if key in topic_lower:
+            # Use seed to pick a consistent but "random" video from the list
+            return videos[seed % len(videos)]
+    
+    # Fallback to default videos
+    return video_map["default"][seed % len(video_map["default"])]
 
 if __name__ == "__main__":
     import uvicorn # type: ignore

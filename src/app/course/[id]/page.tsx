@@ -8,10 +8,49 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { BookOpen, CheckCircle, Video, FileText, PenTool, Clock, BarChart } from "lucide-react"
 import Link from "next/link"
+import { doc, getDoc, updateDoc } from "firebase/firestore"
+import { db } from "@/lib/firebase"
+import { useFirebase } from "@/contexts/FirebaseContext"
+import { Skeleton } from "@/components/ui/skeleton"
+import { toast } from "sonner"
 
-// Mock course data structure with filler content
-const coursesData = {
-  1: {
+// Define interfaces to fix type errors
+interface CourseModule {
+  id: number;
+  title: string;
+  type: string;
+  duration: string;
+  description: string;
+  videoId?: string;
+  content?: string;
+  progress: number;
+}
+
+interface CourseData {
+  modules: number;
+  initialProgress: number;
+  content: CourseModule[];
+}
+
+interface FirebaseCourseData {
+  userId: string;
+  title: string;
+  modules: CourseModule[];
+  progress?: number;
+  learningGoal?: string;
+  createdAt: string;
+}
+
+interface Course {
+  title: string;
+  progress: number;
+  content: CourseModule[];
+  modules?: number;
+}
+
+// Update to use typed record
+const coursesData: Record<string, CourseData> = {
+  "1": {
     modules: 5,
     initialProgress: 0,
     content: [
@@ -67,34 +106,92 @@ export default function CoursePage() {
   const searchParams = useSearchParams()
   const courseId = params.id as string
   const learningGoal = searchParams.get("goal") || "Your Course"
-  const [course, setCourse] = useState<any>(null)
+  const [course, setCourse] = useState<Course | null>(null)
   const [completedModules, setCompletedModules] = useState<number[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const { user } = useFirebase()
 
   useEffect(() => {
-    if (coursesData[courseId]) {
-      setCourse({
-        ...coursesData[courseId],
-        title: decodeURIComponent(learningGoal),
-        progress: coursesData[courseId].initialProgress,
-      })
+    const fetchCourse = async () => {
+      try {
+        if (!user) return
+        
+        // First try to load from Firebase
+        const courseDoc = await getDoc(doc(db, "courses", courseId))
+        
+        if (courseDoc.exists()) {
+          const courseData = courseDoc.data() as FirebaseCourseData
+          
+          // Ensure this course belongs to the user
+          if (courseData.userId === user.uid) {
+            setCourse({
+              title: courseData.title || decodeURIComponent(learningGoal),
+              progress: courseData.progress || 0,
+              content: courseData.modules || []
+            })
+            
+            // Calculate completed modules
+            if (courseData.progress) {
+              const moduleCount = courseData.modules.length
+              const initialCompletedModules = Array.from(
+                { length: Math.floor((courseData.progress / 100) * moduleCount) },
+                (_, index) => index,
+              )
+              setCompletedModules(initialCompletedModules)
+            }
+          } else {
+            setError("You don't have permission to access this course")
+          }
+        } else {
+          // Fallback to mock data - make sure courseId is directly usable as a key
+          if (coursesData[courseId]) {
+            setCourse({
+              title: decodeURIComponent(learningGoal),
+              progress: coursesData[courseId].initialProgress,
+              content: coursesData[courseId].content,
+              modules: coursesData[courseId].modules
+            })
+            
+            const initialCompletedModules = Array.from(
+              { length: Math.floor((coursesData[courseId].initialProgress / 100) * coursesData[courseId].modules) },
+              (_, index) => index,
+            )
+            setCompletedModules(initialCompletedModules)
+          } else {
+            setError("Course not found")
+          }
+        }
+      } catch (err) {
+        console.error("Error loading course:", err)
+        setError("Failed to load course")
+      } finally {
+        setIsLoading(false)
+      }
     }
-  }, [courseId, learningGoal])
+    
+    fetchCourse()
+  }, [courseId, learningGoal, user])
 
-  useEffect(() => {
-    if (course) {
-      const initialCompletedModules = Array.from(
-        { length: Math.floor((course.initialProgress / 100) * course.modules) },
-        (_, index) => index,
-      )
-      setCompletedModules(initialCompletedModules)
-    }
-  }, [course])
+  if (isLoading) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <Skeleton className="h-12 w-3/4 mb-6" />
+        <Skeleton className="h-48 w-full mb-8" />
+        <div className="space-y-4">
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-32 w-full" />
+        </div>
+      </div>
+    )
+  }
 
-  if (!course) {
+  if (error || !course) {
     return (
       <div className="container mx-auto px-4 py-8">
         <h1 className="text-3xl font-bold mb-6">Course Not Found</h1>
-        <p>Sorry, we couldn't find the course you're looking for.</p>
+        <p>{error || "Sorry, we couldn't find the course you're looking for."}</p>
       </div>
     )
   }
@@ -117,7 +214,13 @@ export default function CoursePage() {
   )
 }
 
-function CourseProgress({ course, completedModules }) {
+// Add prop types to components
+interface CourseProgressProps {
+  course: Course;
+  completedModules: number;
+}
+
+function CourseProgress({ course, completedModules }: CourseProgressProps) {
   return (
     <Card className="mb-8">
       <CardHeader>
@@ -127,17 +230,23 @@ function CourseProgress({ course, completedModules }) {
       <CardContent>
         <Progress value={course.progress} className="mb-2" />
         <p className="text-sm text-muted-foreground">
-          {completedModules} of {course.modules} modules completed
+          {completedModules} of {course.modules || course.content.length} modules completed
         </p>
       </CardContent>
     </Card>
   )
 }
 
-function ModuleList({ courseId, course, completedModules }) {
+interface ModuleListProps {
+  courseId: string;
+  course: Course;
+  completedModules: number[];
+}
+
+function ModuleList({ courseId, course, completedModules }: ModuleListProps) {
   return (
     <div className="space-y-4">
-      {course.content.map((module, index) => (
+      {course.content.map((module: CourseModule, index: number) => (
         <ModuleCard
           key={module.id}
           courseId={courseId}
@@ -149,8 +258,14 @@ function ModuleList({ courseId, course, completedModules }) {
   )
 }
 
-function ModuleCard({ courseId, module, isCompleted }) {
-  const getIcon = (type) => {
+interface ModuleCardProps {
+  courseId: string;
+  module: CourseModule;
+  isCompleted: boolean;
+}
+
+function ModuleCard({ courseId, module, isCompleted }: ModuleCardProps) {
+  const getIcon = (type: string) => {
     switch (type) {
       case "video":
         return <Video className="h-6 w-6" />
