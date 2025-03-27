@@ -15,6 +15,28 @@ interface LoadingCurationProps {
   assessmentId?: string | null;
 }
 
+interface TopicItem {
+  title?: string;
+  content?: string;
+  [key: string]: any; // For any other properties that might exist
+}
+
+type TopicType = string | TopicItem;
+
+interface ModuleData {
+  id: number;
+  title: string;
+  description?: string;
+  progress?: number;
+  topics: TopicData[];
+}
+
+interface TopicData {
+  id: string;
+  title: string;
+  content?: string;
+}
+
 export default function LoadingCuration({ learningGoal, assessmentId }: LoadingCurationProps) {
   const [quoteIndex, setQuoteIndex] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
@@ -132,17 +154,45 @@ export default function LoadingCuration({ learningGoal, assessmentId }: LoadingC
         
         const data = await response.json()
         
-        // Save course to Firebase
+        // Save course to Firebase - create the document first with basic structure
         const courseRef = doc(collection(db, "courses"))
+        
+        // Log the course structure before saving
+        console.log("About to save course data:", data);
+        
+        // Ensure module structure is correct
+        const structuredModules = data.modules.map((module: ModuleData) => {
+          // Make sure each module has all required fields, removing type and duration
+          return {
+            id: module.id,
+            title: module.title,
+            description: module.description || `Learn about ${module.title}`,
+            progress: 0,
+            topics: module.topics.map((topic: TopicData) => {
+              // Ensure each topic has correct structure with content field, removing type and duration
+              return {
+                id: topic.id,
+                title: topic.title,
+                content: topic.content || ""
+              };
+            })
+          };
+        });
+        
+        // Create the initial course structure with properly structured modules
         await setDoc(courseRef, {
           userId: user.uid,
           courseId: data.courseId,
-          title: data.title,
-          modules: data.modules,
+          title: data.title || `${learningGoal} Course`,
+          modules: structuredModules,
           learningGoal,
           createdAt: new Date().toISOString(),
-          progress: 0
-        })
+          progress: 0,
+          generationComplete: data.isComplete || false
+        });
+        
+        // Log the saved course structure for verification
+        console.log("Created course with structured modules:", structuredModules);
         
         // Set courseId for redirection
         setCourseId(courseRef.id)
@@ -158,10 +208,18 @@ export default function LoadingCuration({ learningGoal, assessmentId }: LoadingC
       }
     }
     
-    if (user) {
-      generateCourse()
+    // IMPORTANT: Add this check to prevent multiple effect runs
+    const callOnce = async () => {
+      if (user && !courseId) {
+        await generateCourse()
+      }
     }
-  }, [user, learningGoal, assessmentId])
+    
+    callOnce()
+    
+    // Remove 'user' from the dependency array to prevent multiple calls when user changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [learningGoal, assessmentId, courseId])
 
   const handleStartLearning = () => {
     // Use the Firebase document ID of the course

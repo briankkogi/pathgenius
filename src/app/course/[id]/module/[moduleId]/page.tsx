@@ -18,37 +18,9 @@ import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
+import { CourseModule, ModuleTopic, QuizQuestion } from "@/app/types/course"
 
-// Define interfaces for type safety
-interface QuizQuestion {
-  question: string;
-  options: string[];
-  correctAnswer: number;
-}
-
-interface ModuleTopic {
-  id: string;
-  title: string;
-  type: string;
-  duration: string;
-  videoId?: string;
-  content?: string;
-  notes?: string;
-}
-
-interface CourseModule {
-  id: number;
-  title: string;
-  type: string;
-  duration: string;
-  description: string;
-  videoId?: string;
-  content?: string;
-  progress: number;
-  topics?: ModuleTopic[];
-  quiz?: QuizQuestion[];
-}
-
+// Add the FirebaseCourseData interface that's used in this file
 interface FirebaseCourseData {
   userId: string;
   title: string;
@@ -152,8 +124,8 @@ const coursesData = {
 export default function ModulePage() {
   const params = useParams()
   const router = useRouter()
-  const courseId = params.id as string
-  const moduleId = params.moduleId as string
+  const courseId = params?.id as string || "1"
+  const moduleId = params?.moduleId as string || "1"
   const [module, setModule] = useState<CourseModule | null>(null)
   const [currentTopicIndex, setCurrentTopicIndex] = useState(0)
   const [progress, setProgress] = useState(0)
@@ -173,84 +145,64 @@ export default function ModulePage() {
   useEffect(() => {
     const fetchModule = async () => {
       try {
-        if (!user) return
-
-        // Try to load from Firebase first
-        const courseDoc = await getDoc(doc(db, "courses", courseId))
+        if (!user) return;
+        
+        const courseDoc = await getDoc(doc(db, "courses", courseId));
         
         if (courseDoc.exists()) {
-          const courseData = courseDoc.data() as FirebaseCourseData
+          const courseData = courseDoc.data() as FirebaseCourseData;
           
           // Ensure this course belongs to the user
           if (courseData.userId === user.uid) {
-            // Find the module by ID
-            const moduleIndex = parseInt(moduleId) - 1
-            const foundModule = courseData.modules[moduleIndex]
+            // Find the specific module by ID
+            const moduleIndex = parseInt(moduleId) - 1;
+            const moduleData = courseData.modules[moduleIndex];
             
-            if (foundModule) {
-              // Ensure the module has all required properties for CourseModule type
-              const normalizedModule: CourseModule = {
-                id: foundModule.id,
-                title: foundModule.title,
-                type: foundModule.type || "article",
-                duration: foundModule.duration || "15 minutes",
-                description: foundModule.description || foundModule.title,
-                videoId: foundModule.videoId,
-                content: foundModule.content,
-                progress: foundModule.progress || 0,
-                topics: foundModule.topics,
-                quiz: foundModule.quiz || []
-              }
+            if (moduleData) {
+              setModule(moduleData);
               
-              setModule(normalizedModule)
+              // Explicitly log the retrieved module data for debugging
+              console.log("Retrieved module data:", moduleData);
+              console.log("Module topics:", moduleData.topics);
               
-              // Initialize quiz answers if there are quiz questions
-              if (normalizedModule.quiz && normalizedModule.quiz.length > 0) {
-                setQuizAnswers(new Array(normalizedModule.quiz.length).fill(-1))
-              }
+              // Normalize the module structure
+              const normalizedModule = {
+                ...moduleData,
+                id: moduleData.id || moduleIndex + 1,
+                title: moduleData.title || `Module ${moduleIndex + 1}`,
+                description: moduleData.description || `Module ${moduleIndex + 1} content`,
+                quiz: moduleData.quiz || []
+              };
               
               // Check if module has topics property
-              if (!normalizedModule.topics) {
-                // Create a single topic from the module's own content
-                const generatedTopics: ModuleTopic[] = []
+              if (normalizedModule.topics && normalizedModule.topics.length > 0) {
+                // Normalize each topic to ensure it has all required fields, removing type and duration
+                const normalizedTopics = normalizedModule.topics.map((topic: ModuleTopic) => {
+                  return {
+                    id: topic.id || `${normalizedModule.id}-1`,
+                    title: topic.title || 'Untitled Topic',
+                    content: topic.content || `# ${topic.title || 'Untitled Topic'}\n\nThis content is being prepared.`
+                  };
+                });
                 
-                if (normalizedModule.type === "video" && normalizedModule.videoId) {
-                  generatedTopics.push({
-                    id: `${normalizedModule.id}-1`,
-                    title: normalizedModule.title,
-                    type: "video",
-                    duration: normalizedModule.duration,
-                    videoId: normalizedModule.videoId,
-                    notes: `Notes for ${normalizedModule.title}`
-                  })
-                } else if (normalizedModule.content) {
-                  generatedTopics.push({
-                    id: `${normalizedModule.id}-1`,
-                    title: normalizedModule.title,
-                    type: "article",
-                    duration: normalizedModule.duration,
-                    content: normalizedModule.content
-                  })
-                } else {
-                  // Fallback topic if no content
-                  generatedTopics.push({
-                    id: `${normalizedModule.id}-1`,
-                    title: normalizedModule.title,
-                    type: "article",
-                    duration: "10 minutes",
-                    content: `# ${normalizedModule.title}\n\nThis is a placeholder content for ${normalizedModule.title}.`
-                  })
-                }
-                
-                setTopics(generatedTopics)
+                console.log("Normalized topics:", normalizedTopics);
+                setTopics(normalizedTopics);
               } else {
-                setTopics(normalizedModule.topics)
+                // Create default topics if none exist
+                const defaultTopics = [
+                  {
+                    id: `${normalizedModule.id}-1`,
+                    title: normalizedModule.title,
+                    content: `# ${normalizedModule.title}\n\nThis module content is being prepared.`
+                  }
+                ];
+                setTopics(defaultTopics);
               }
             } else {
-              setError("Module not found")
+              setError("Module not found");
             }
           } else {
-            setError("You don't have permission to access this course")
+            setError("You don't have permission to access this course");
           }
         } else {
           // Fallback to mock data
@@ -262,8 +214,6 @@ export default function ModulePage() {
               const mockModule: CourseModule = {
                 id: foundModule.id,
                 title: foundModule.title,
-                type: foundModule.type || "mixed",
-                duration: foundModule.duration || "30 minutes",
                 description: foundModule.description,
                 progress: foundModule.progress || 0,
                 topics: foundModule.topics,
@@ -284,11 +234,11 @@ export default function ModulePage() {
             setError("Course not found")
           }
         }
-      } catch (err) {
-        console.error("Error loading module:", err)
-        setError("Failed to load module")
+      } catch (error) {
+        console.error("Error fetching module:", error);
+        setError("Failed to load module content");
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
     }
     
@@ -333,10 +283,11 @@ export default function ModulePage() {
   }
 
   const handleQuizSubmit = async () => {
-    if (!module || !module.quiz) return;
+    if (!module || !module.quiz || module.quiz.length === 0) return;
     
     // Calculate score
-    const correctAnswers = module.quiz.filter((q, i) => q.correctAnswer === quizAnswers[i]).length;
+    const correctAnswers = module.quiz.filter((q: QuizQuestion, i: number) => 
+      q.correctAnswer === quizAnswers[i]).length;
     const score = Math.round((correctAnswers / module.quiz.length) * 100);
     
     setQuizScore(score);
@@ -459,11 +410,11 @@ export default function ModulePage() {
                       topics.map((topic, index) => (
                         <div key={topic.id} className={index === currentTopicIndex ? "block" : "hidden"}>
                           <h3 className="text-2xl font-semibold mb-4">{topic.title}</h3>
-                          {topic.type === "video" && topic.videoId ? (
+                          {('videoId' in topic) && topic.videoId ? (
                             <div className="space-y-4">
                               <div className="aspect-video rounded-lg overflow-hidden shadow-lg">
                                 <YouTube
-                                  videoId={topic.videoId}
+                                  videoId={topic.videoId as string}
                                   opts={{
                                     width: "100%",
                                     height: "100%",
@@ -478,10 +429,12 @@ export default function ModulePage() {
                                   onEnd={() => index === currentTopicIndex && handleTopicNavigation("next")}
                                 />
                               </div>
-                              {topic.notes && (
+                              {('notes' in topic) && (
                                 <div className="prose max-w-none">
                                   <h4 className="text-lg font-semibold mb-2">Notes:</h4>
-                                  <div dangerouslySetInnerHTML={{ __html: topic.notes }} />
+                                  <div dangerouslySetInnerHTML={{ 
+                                    __html: typeof topic.notes === 'string' ? topic.notes : '' 
+                                  }} />
                                 </div>
                               )}
                             </div>
@@ -518,11 +471,11 @@ export default function ModulePage() {
                     ) : (
                       // Handle modules without topics - show direct content
                       <div>
-                        {module.type === "video" && module.videoId ? (
+                        {('videoId' in module) && module.videoId ? (
                           <div className="space-y-4">
                             <div className="aspect-video rounded-lg overflow-hidden shadow-lg">
                               <YouTube
-                                videoId={module.videoId}
+                                videoId={module.videoId as string}
                                 opts={{
                                   width: "100%",
                                   height: "100%",
@@ -578,17 +531,17 @@ export default function ModulePage() {
                     <h3 className="text-2xl font-semibold mb-4">Module Quiz</h3>
                     {module.quiz && module.quiz.length > 0 ? (
                       <>
-                        {module.quiz.map((question, qIndex) => (
+                        {module.quiz.map((question: QuizQuestion, qIndex: number) => (
                           <Card key={qIndex} className="p-4">
                             <CardContent>
                               <h4 className="font-semibold mb-4">{question.question}</h4>
                               <RadioGroup 
-                                value={quizAnswers[qIndex].toString()} 
+                                value={quizAnswers[qIndex]?.toString()} 
                                 onValueChange={(value) => handleQuizAnswer(qIndex, parseInt(value))}
                                 className="space-y-2"
                                 disabled={quizSubmitted}
                               >
-                                {question.options.map((option, oIndex) => (
+                                {question.options.map((option: string, oIndex: number) => (
                                   <div key={oIndex} className="flex items-center space-x-2">
                                     <RadioGroupItem 
                                       value={oIndex.toString()} 
@@ -702,11 +655,7 @@ export default function ModulePage() {
                 <ul className="space-y-2">
                   {topics.map((topic, index) => (
                     <li key={topic.id} className="flex items-center space-x-2">
-                      {topic.type === "video" ? (
-                        <Video className="h-4 w-4 text-primary" />
-                      ) : (
-                        <FileText className="h-4 w-4 text-primary" />
-                      )}
+                      <FileText className="h-4 w-4 text-primary" />
                       <span className={index <= currentTopicIndex ? "text-primary" : "text-muted-foreground"}>
                         {topic.title}
                       </span>

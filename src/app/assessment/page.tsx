@@ -66,7 +66,7 @@ export default function Assessment() {
       if (!user) return;
       
       // Get the session ID from the URL
-      const firestoreSessionId = searchParams.get('sessionId');
+      const firestoreSessionId = searchParams?.get('sessionId') || "";
       
       if (!firestoreSessionId) {
         setError("No assessment session found. Please return to the dashboard and try again.");

@@ -42,7 +42,7 @@ export default function AssessmentResults() {
   const searchParams = useSearchParams()
   const { user, loading } = useFirebase()
   
-  const assessmentId = searchParams.get('id')
+  const assessmentId = searchParams?.get('id') || ""
 
   useEffect(() => {
     // Redirect if not authenticated

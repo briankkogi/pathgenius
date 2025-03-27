@@ -70,12 +70,11 @@ class CurationRequest(BaseModel):
 class CourseModule(BaseModel):
     id: int
     title: str
-    type: str
-    duration: str
     description: str
-    videoId: Optional[str] = None
-    content: Optional[str] = None
     progress: int = 0
+    content: Optional[str] = None
+    topics: Optional[List[Dict[str, Any]]] = None
+    createdAt: Optional[str] = None
 
 class CourseResponse(BaseModel):
     courseId: str
@@ -679,144 +678,146 @@ async def curate_course(request: CurationRequest):
         
         logger.info(f"Starting course curation for user {user_id}, goal: {learning_goal}")
         
-        # Use recommended modules if available
-        recommended_modules = []
-        if request.recommendedModules and len(request.recommendedModules) > 0:
-            recommended_modules = request.recommendedModules
-            logger.info(f"Using {len(recommended_modules)} recommended modules from assessment")
+        # Validate recommended modules
+        if not request.recommendedModules or len(request.recommendedModules) == 0:
+            logger.warning(f"No recommended modules provided from assessment.")
+            raise HTTPException(status_code=400, detail="No recommended modules provided. Please complete an assessment first.")
         
-        # Updated prompt with recommended modules if available
-        module_prompt = f"""
-        You are an educational content creator. Create a detailed course for {learning_goal}.
+        recommended_modules = request.recommendedModules
+        logger.info(f"Using recommended modules from assessment, found {len(recommended_modules)} modules")
         
-        IMPORTANT: Your response will be stored in Firebase directly, with NO fallback content generation.
-        """
+        # Initialize processed modules list - we'll only use the first module for content generation
+        processed_modules = []
         
-        # Include recommended modules in the prompt if available
-        if recommended_modules:
-            module_prompt += "\n\nI want you to create a course with these exact modules and topics:"
-            for i, module in enumerate(recommended_modules[:5]):  # Limit to 5 modules
-                module_prompt += f"\n\nModule {i+1}: {module.get('title', f'Module on {learning_goal}')}"
-                if "topics" in module and isinstance(module["topics"], list):
-                    for j, topic in enumerate(module["topics"][:3]):  # Limit to 3 topics per module
-                        module_prompt += f"\n- Topic {j+1}: {topic}"
-        
-        # Continue with the rest of the prompt...
-        module_prompt += f"""
-        
-        The course must include:
-        1. Five modules with clear titles related to {learning_goal}
-        2. Each module must have a detailed description of what will be covered (under 200 characters)
-        3. EXACTLY 3 TOPICS PER MODULE with COMPLETE EDUCATIONAL CONTENT
-        
-        EACH TOPIC MUST BE COMPREHENSIVE and provide complete educational value:
-        - NO PLACEHOLDER TEXT OR GENERIC CONTENT - ALL content must be specific to {learning_goal}
-        - Article content must include detailed explanations, examples, and relevant information
-        - Include definitions, real examples, practical applications, and domain-specific information
-        - Article content should have multiple sections with headings and subheadings
-        - All content should be factual, accurate, and educational
-        
-        DO NOT use phrases like "In this section, we'll explore..." without actually providing the full
-        educational content that follows. The content you provide will be shown directly to users
-        with no further processing.
-        
-        FORMAT YOUR RESPONSE AS A VALID JSON OBJECT with this EXACT structure:
-        {{
-          "title": "{learning_goal} Course",
-          "modules": [
-            {{
-              "id": 1,
-              "title": "Module Title",
-              "description": "Detailed module description",
-              "type": "mixed",
-              "duration": "45 minutes",
-              "progress": 0,
-              "topics": [
-                {{
-                  "id": "1-1",
-                  "title": "Topic 1 Title",
-                  "type": "video",
-                  "duration": "15 minutes",
-                  "videoId": "dQw4w9WgXcQ",
-                  "notes": "Complete notes about the video content with no placeholder text"
-                }},
-                {{
-                  "id": "1-2",
-                  "title": "Topic 2 Title",
-                  "type": "article",
-                  "duration": "30 minutes",
-                  "content": "# Complete Article Title\\n\\n## Introduction\\n\\nThis should be complete educational content about {learning_goal} with no placeholders..."
-                }},
-                {{
-                  "id": "1-3",
-                  "title": "Topic 3 Title",
-                  "type": "article",
-                  "duration": "30 minutes",
-                  "content": "# Complete Article Title\\n\\n## Main Concepts\\n\\nThis should be complete educational content about {learning_goal} with no placeholders..."
-                }}
-              ]
-            }}
-            // Repeat for all 5 modules
-          ]
-        }}
-        
-        CRITICAL CONTENT REQUIREMENTS:
-        1. WRITE COMPLETE EDUCATIONAL CONTENT - not just structure or placeholders
-        2. ALL content must specifically teach about {learning_goal} - no generic text
-        3. EVERY piece of content must be factually accurate and educational
-        4. Content must actually teach concepts, not just mention that it will teach concepts
-        5. Structure content with clear sections and proper markdown formatting
-        6. All topic content should be thorough and complete
-        
-        Remember: Users will see exactly what you provide with no further enhancements.
-        """
-
-        # Make a single request to the AI with increased token limit
-        async with httpx.AsyncClient(timeout=600.0) as client:  # Extended timeout for more content
-            logger.info("Making request to Ollama API")
+        # Get the first module only for processing
+        if len(recommended_modules) > 0:
+            first_module_data = recommended_modules[0]
+            module_title = first_module_data.get('title', f"Module 1 on {learning_goal}")
+            topics = []
             
-            response = await client.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": "gemma3:4b",
-                    "prompt": module_prompt,
-                    "stream": False,
-                    "temperature": 0.7,
-                    "max_tokens": 24000  # Further increased for even more comprehensive content
-                }
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Ollama API error: {response.status_code}")
-                raise HTTPException(status_code=500, detail="Failed to generate course content")
-
-            result = response.json()
-            raw_response = result.get("response", "")
-            
-            # Process the response and create the course
-            # [... rest of your existing processing code for the response ...]
-            
-            # Extract JSON from code blocks if present
-            json_content = raw_response
-            if "```json" in raw_response:
-                match = re.search(r'```json\s*(.*?)\s*```', raw_response, re.DOTALL)
-                if match:
-                    json_content = match.group(1)
-            elif "```" in raw_response:
-                match = re.search(r'```\s*(.*?)\s*```', raw_response, re.DOTALL)
-                if match:
-                    json_content = match.group(1)
+            # Process topics from the first module
+            if "topics" in first_module_data and isinstance(first_module_data["topics"], list):
+                for j, topic in enumerate(first_module_data["topics"][:3]):  # Limit to 3 topics
+                    topic_title = topic if isinstance(topic, str) else topic.get('title', f"Topic {j+1}")
                     
-            # Clean and process the JSON content
-            # [... rest of your processing code ...]
+                    # Removed type field
+                    topics.append({
+                        "id": f"1-{j+1}",
+                        "title": topic_title,
+                        "content": ""  # Will be populated with AI content
+                    })
             
-            # Return the final course response
-            return {
-                "courseId": course_id,
-                "title": "Your Course Title Here",  # Replace with actual title from processed data
-                "modules": [],  # Replace with actual modules from processed data
-                "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            # Create the first module structure - removed type field
+            first_module = {
+                "id": 1,
+                "title": module_title,
+                "description": f"Learn about {module_title} for {learning_goal}",
+                "progress": 0,
+                "topics": topics
             }
+            
+            # Generate content for each topic in the first module
+            for topic_index, topic in enumerate(first_module["topics"]):
+                topic_title = topic["title"]
+                logger.info(f"Generating content for topic: {topic_title}")
+                
+                # Create a focused prompt for this topic
+                topic_prompt = f"""
+                You are an educational content creator writing a detailed article about "{topic_title}" 
+                for a course on {learning_goal}.
+                
+                Create comprehensive, educational content that a student can learn from directly.
+                
+                The content should:
+                1. Be detailed and informative (at least 500 words)
+                2. Include examples and practical applications
+                3. Be well structured with headers and subheaders
+                4. Be factually accurate and comprehensive
+                5. Include markdown formatting (headers with #, lists, etc.)
+                
+                DO NOT use placeholder text or generic content - this will be shown directly to students.
+                DO NOT introduce the topic with phrases like "In this article we will discuss..." - 
+                instead, get straight into teaching the content.
+                
+                Write ONLY the article content in markdown format.
+                """
+                
+                # Generate content for this specific topic
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    logger.info(f"Making request to AI for topic {topic_title}")
+                    
+                    response = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": "gemma3:4b",
+                            "prompt": topic_prompt,
+                            "stream": False,
+                            "temperature": 0.7,
+                            "max_tokens": 4000
+                        }
+                    )
+                    
+                    if response.status_code != 200:
+                        logger.error(f"AI error for topic {topic_title}: {response.status_code}")
+                        topic["content"] = ""
+                        continue
+                    
+                    result = response.json()
+                    topic_content = result.get("response", "")
+                    
+                    # Clean up any potential code blocks or extra content
+                    if "```" in topic_content:
+                        match = re.search(r'```(?:markdown)?\s*([\s\S]*?)\s*```', topic_content, re.DOTALL)
+                        if match:
+                            topic_content = match.group(1)
+                    
+                    # Ensure content has a title
+                    if not topic_content.strip().startswith("#"):
+                        topic_content = f"# {topic_title}\n\n{topic_content}"
+                    
+                    # Log the generated content
+                    logger.info(f"Generated {len(topic_content)} characters for topic {topic_title}")
+                    logger.info(f"Content preview: {topic_content[:100]}...")
+                    
+                    # Update the topic with the generated content
+                    topic["content"] = topic_content
+            
+            # Add the processed first module
+            processed_modules.append(first_module)
+            
+            # Add remaining modules without processing their content
+            for i, module in enumerate(recommended_modules[1:5], start=1):
+                module_title = module.get('title', f"Module {i+1} on {learning_goal}")
+                empty_topics = []
+                
+                # Create empty topic structures for other modules - removed type field
+                if "topics" in module and isinstance(module["topics"], list):
+                    for j, topic in enumerate(module["topics"][:3]):
+                        topic_title = topic if isinstance(topic, str) else topic.get('title', f"Topic {j+1}")
+                        empty_topics.append({
+                            "id": f"{i+1}-{j+1}",
+                            "title": topic_title,
+                            "content": ""
+                        })
+                
+                # Added to processed modules - removed type field
+                processed_modules.append({
+                    "id": i+1,
+                    "title": module_title,
+                    "description": f"Learn about {module_title} for {learning_goal}",
+                    "progress": 0,
+                    "topics": empty_topics
+                })
+        
+        # Return the response with only the first module's content generated
+        return {
+            "courseId": course_id,
+            "title": f"{learning_goal} Course",
+            "modules": processed_modules,
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "isComplete": False,
+            "firstModuleComplete": True
+        }
             
     except Exception as e:
         logger.error(f"Error in curate_course: {str(e)}")
@@ -829,361 +830,6 @@ async def get_course(course_id: str):
         raise HTTPException(status_code=404, detail="Course not found")
     
     return curated_courses[course_id]
-
-# Add these helper functions near the end of the file
-def create_detailed_fallback_course(learning_goal, profession_level):
-    """Create a detailed fallback course structure if parsing fails"""
-    
-    course = {
-        "title": f"Comprehensive {learning_goal} Course for {profession_level}s",
-        "modules": []
-    }
-    
-    # Generate 5 detailed modules
-    for i in range(1, 6):
-        course["modules"].append(create_detailed_module(learning_goal, i))
-    
-    return course
-
-def create_detailed_module(learning_goal, module_index):
-    """Create a detailed module with topics and quiz"""
-    
-    # Define module templates based on index
-    module_templates = [
-        {
-            "title": f"Introduction to {learning_goal}",
-            "description": f"Learn the fundamentals and core concepts of {learning_goal}."
-        },
-        {
-            "title": f"Essential {learning_goal} Techniques",
-            "description": f"Master the essential techniques and methods used in {learning_goal}."
-        },
-        {
-            "title": f"Intermediate {learning_goal} Concepts",
-            "description": f"Build on the basics and learn more complex concepts in {learning_goal}."
-        },
-        {
-            "title": f"Advanced {learning_goal} Applications",
-            "description": f"Apply your knowledge to real-world problems and advanced scenarios."
-        },
-        {
-            "title": f"Mastering {learning_goal}: Best Practices",
-            "description": f"Learn best practices, optimization techniques, and professional workflows."
-        }
-    ]
-    
-    # Use the appropriate template or fallback to generic
-    template_index = min(module_index - 1, len(module_templates) - 1)
-    template = module_templates[template_index]
-    
-    # Create the module
-    module = {
-        "id": module_index,
-        "title": template["title"],
-        "description": template["description"],
-        "type": "mixed",
-        "duration": f"{30 + module_index * 10} minutes",
-        "progress": 0,
-        "topics": create_module_topics(template["title"], learning_goal, module_index),
-        "quiz": create_module_quiz(template["title"], learning_goal)
-    }
-    
-    return module
-
-def create_module_topics(module_title, learning_goal, module_index):
-    """Create detailed topics for a module"""
-    
-    # Topic templates for different module positions
-    if module_index == 1:  # Introduction module
-        topics = [
-            {
-                "id": f"{module_index}-1",
-                "title": f"What is {learning_goal}?",
-                "type": "video",
-                "duration": "10 minutes",
-                "videoId": find_topic_video(f"introduction to {learning_goal}", module_index),
-                "notes": f"""
-                This video provides a comprehensive introduction to {learning_goal}.
-                
-                Key points covered:
-                - Definition and scope of {learning_goal}
-                - Historical development and context
-                - Why {learning_goal} is important in today's world
-                - Overview of fundamental concepts
-                - Examples of {learning_goal} in real-world applications
-                
-                After watching this video, you'll have a solid understanding of what {learning_goal} entails and why it's worth studying.
-                """
-            },
-            {
-                "id": f"{module_index}-2",
-                "title": f"Core Principles of {learning_goal}",
-                "type": "article",
-                "duration": "15 minutes read",
-                "content": f"""
-                # Core Principles of {learning_goal}
-                
-                In this article, we'll explore the fundamental principles that form the foundation of {learning_goal}. Understanding these principles is essential for mastering more advanced concepts later in the course.
-                
-                ## Foundational Concepts
-                
-                {learning_goal} is built on several key principles that guide its application and development. These principles include:
-                
-                1. **First Principle**: The foundation of all {learning_goal} practices begins with understanding this core concept.
-                   - How it works: This principle operates by establishing a framework for approaching problems.
-                   - Why it matters: Without this principle, the entire field would lack coherence and direction.
-                
-                2. **Second Principle**: Building on the first principle, this concept extends our understanding.
-                   - Key applications: This principle is applied when working with complex systems or problems.
-                   - Historical context: This principle emerged as the field evolved to address new challenges.
-                
-                3. **Third Principle**: This principle completes the foundational triad of {learning_goal}.
-                   - Relationship to other principles: This works in conjunction with the first two principles.
-                   - Modern interpretations: How this principle has evolved in contemporary practice.
-                
-                ## Practical Applications
-                
-                The principles of {learning_goal} are not merely theoretical constructs but have practical applications in various domains:
-                
-                * **Industry Application**: How these principles are applied in professional settings
-                * **Research Directions**: Current research areas that build upon these foundations
-                * **Everyday Examples**: How you might encounter these principles in daily life
-                
-                ## Getting Started
-                
-                To begin applying these principles, try these starter exercises:
-                
-                1. Identify examples of the first principle in action in your own experience
-                2. Compare and contrast the second and third principles
-                3. Create a simple project that incorporates all three principles
-                
-                ## Conclusion
-                
-                These core principles form the foundation upon which all {learning_goal} knowledge is built. In the next topics, we'll explore how to apply these principles to solve real-world problems and develop more advanced skills.
-                """
-            },
-            {
-                "id": f"{module_index}-3",
-                "title": f"Getting Started with {learning_goal}",
-                "type": "video",
-                "duration": "12 minutes",
-                "videoId": find_topic_video(f"getting started with {learning_goal}", module_index + 10),
-                "notes": f"""
-                This video walks you through the first steps of working with {learning_goal}.
-                
-                Key points covered:
-                - Setting up your environment for {learning_goal}
-                - Essential tools and resources you'll need
-                - First exercises to practice your skills
-                - Common beginner mistakes and how to avoid them
-                - Next steps after completing this module
-                
-                After watching this tutorial, you'll be ready to start practicing {learning_goal} on your own.
-                """
-            }
-        ]
-    else:  # Other modules
-        # Generate topic titles based on module index
-        topic_titles = [
-            f"Advanced Concept {(module_index-1)*2 + 1} in {learning_goal}",
-            f"Practical Applications of {learning_goal} - Part {module_index}",
-            f"Problem Solving with {learning_goal} Techniques"
-        ]
-        
-        topics = [
-            {
-                "id": f"{module_index}-1",
-                "title": topic_titles[0],
-                "type": "video",
-                "duration": f"{8 + module_index} minutes",
-                "videoId": find_topic_video(topic_titles[0], module_index * 3),
-                "notes": f"""
-                This video explores advanced concepts in {learning_goal} that build on the foundation you've already established.
-                
-                Key points covered:
-                - Detailed explanation of {topic_titles[0]}
-                - How this concept connects to previous modules
-                - Step-by-step demonstrations
-                - Expert tips for mastering this concept
-                - Common challenges and solutions
-                
-                These advanced techniques will significantly enhance your capabilities in {learning_goal}.
-                """
-            },
-            {
-                "id": f"{module_index}-2",
-                "title": topic_titles[1],
-                "type": "article",
-                "duration": "20 minutes read",
-                "content": f"""
-                # {topic_titles[1]}
-                
-                In this article, we'll explore practical applications of {learning_goal} that demonstrate how the concepts you've learned can be applied to real-world situations.
-                
-                ## Real-World Applications
-                
-                {learning_goal} has numerous applications across different industries and domains. Here are some key examples:
-                
-                ### Application Area 1
-                
-                One of the most significant applications of {learning_goal} is in this first area. This involves:
-                
-                - Using {learning_goal} to solve specific problems in this domain
-                - How professionals in this field leverage these techniques
-                - Case studies of successful implementations
-                - Tools and frameworks commonly used
-                
-                For example, a typical workflow might look like this:
-                
-                1. Identify the problem that needs solving
-                2. Apply the principles from Module {module_index-1}
-                3. Implement the solution using techniques covered in this module
-                4. Evaluate results and refine the approach
-                
-                ### Application Area 2
-                
-                Another important application domain includes:
-                
-                - Specific challenges in this area that {learning_goal} helps address
-                - Adaptations of core techniques for this specific domain
-                - Integration with other systems or methodologies
-                - Performance considerations and optimization strategies
-                
-                ## Hands-On Project
-                
-                To reinforce your understanding, try completing this hands-on project:
-                
-                1. **Project Goal**: Create a solution that addresses a specific problem using {learning_goal}
-                2. **Requirements**:
-                   - Apply at least two techniques covered in this module
-                   - Document your process and decisions
-                   - Evaluate the effectiveness of your solution
-                3. **Extension Ideas**:
-                   - Try alternative approaches and compare results
-                   - Scale your solution to handle larger inputs
-                   - Optimize for better performance
-                
-                ## Best Practices
-                
-                When applying {learning_goal} in real-world scenarios, keep these best practices in mind:
-                
-                - Always start by clearly defining the problem
-                - Choose the right technique for the specific situation
-                - Test your solutions thoroughly
-                - Document your approach and results
-                - Continuously refine and improve your implementation
-                
-                ## Next Steps
-                
-                After mastering these practical applications, you'll be ready to:
-                
-                - Take on more complex problems
-                - Combine multiple techniques for more sophisticated solutions
-                - Develop your own custom approaches based on core principles
-                
-                In the next topic, we'll explore problem-solving strategies that will further enhance your skills.
-                """
-            },
-            {
-                "id": f"{module_index}-3",
-                "title": topic_titles[2],
-                "type": "video",
-                "duration": f"{10 + module_index * 2} minutes",
-                "videoId": find_topic_video(topic_titles[2], module_index * 5),
-                "notes": f"""
-                This video demonstrates how to approach and solve problems using {learning_goal} techniques.
-                
-                Key points covered:
-                - Problem-solving framework specific to {learning_goal}
-                - Analysis of complex examples
-                - Step-by-step walkthrough of solving challenging problems
-                - Common pitfalls and how to avoid them
-                - Strategies for approaching unfamiliar problems
-                
-                After completing this video, you'll have stronger problem-solving skills that you can apply to a wide range of {learning_goal} challenges.
-                """
-            }
-        ]
-    
-    return topics
-
-def create_module_quiz(module_title, learning_goal):
-    """Create a quiz for a module"""
-    
-    # Generic quiz questions can be customized based on the learning goal
-    quiz = [
-        {
-            "question": f"Which of the following is a key principle of {learning_goal}?",
-            "options": [
-                f"The fundamental concept that defines {learning_goal}",
-                f"A concept unrelated to {learning_goal}",
-                f"A technique from a different field entirely",
-                f"None of the above"
-            ],
-            "correctAnswer": 0
-        },
-        {
-            "question": f"What is the best approach when applying {learning_goal} to solve a problem?",
-            "options": [
-                "Skip the planning phase and start implementing immediately",
-                "Use the most complex technique available regardless of the problem",
-                "Analyze the problem, choose appropriate techniques, and test the solution",
-                "Always use the exact same approach for all problems"
-            ],
-            "correctAnswer": 2
-        },
-        {
-            "question": f"Which of these is NOT typically associated with {learning_goal}?",
-            "options": [
-                "Structured problem-solving",
-                "Application of core principles",
-                "Random guessing without methodology",
-                "Continuous learning and improvement"
-            ],
-            "correctAnswer": 2
-        }
-    ]
-    
-    return quiz
-
-def find_topic_video(topic, seed):
-    """Find an appropriate YouTube video ID for a topic"""
-    
-    # Map of common topics to actual YouTube video IDs
-    video_map = {
-        "programming": ["fKl2JW_qrso", "JJmcL1N2KQs", "zOjov-2OZ0E", "bJzb-RuUcMU"],
-        "python": ["kqtD5dpn9C8", "rfscVS0vtbw", "8DvywoWv6fI", "f79MRyMsjrQ"],
-        "javascript": ["W6NZfCO5SIk", "PkZNo7MFNFg", "jS4aFq5-91M", "hdI2bqOjy3c"],
-        "web development": ["UB1O30fR-EE", "5YDVJaItmaY", "gXLjWRteuWI", "qz0aGYrrlhU"],
-        "data science": ["ua-CiDNNj30", "JL_grPfXcT4", "N6BghzuFLIg", "EF_1Ixm8TZM"],
-        "machine learning": ["7eh4d6sabA0", "ukzFI9rgwfU", "i_LwzRVP7bg", "aircAruvnKk"],
-        "artificial intelligence": ["kWmX3pd1f10", "mJeNghZXtMo", "fygRgiiqrgM", "oV74Najm6Nc"],
-        "algorithms": ["kPRA0W1kECg", "zO_EXPwqbXk", "oruBLhAsDoc", "P3YpTkHLL0c"],
-        "data structures": ["zg9ih6SVACc", "DuDz6B4cqVc", "B31LgI4Y4DQ", "9rhT3P1eOck"],
-        "cybersecurity": ["inWWhr5tnEA", "bPVaOlJ6ln0", "3NM_b9OzHmM", "U_P23SqJaDc"],
-        "blockchain": ["SSo_EIwHSd4", "qOVAbKKSH10", "bBC-nXj3Ng4", "IhJ509WL66Q"],
-        "game development": ["Bg5GwioYt7I", "vFjXKOXdgGo", "AfTja-ZLLRQ", "yxnH8fqf9wI"],
-        "mobile app development": ["TN8xZ64ibB0", "0-S5a0eXPoc", "SR6zDlbZozg", "fgdpvwEWJ9M"],
-        "database": ["HXV3zeQKqGY", "7S_tz1z_5bA", "lpWIJgdM9co", "4cWkVbC2bfE"],
-        "cloud computing": ["M988_fsOSWo", "IDLrwkBg3Bc", "b4P4adPgrqY", "1pBuwKwaHp0"],
-        "devops": ["Wvf0mBNGjXY", "S0RTiI7iH7A", "Y-KD0I_h1GI", "0yWAtQ6wYNc"],
-        "frontend": ["8gNrZ4lAnAw", "mU6anWqZJcc", "uK-zIOGi3j4", "zJSY8tbf_ys"],
-        "backend": ["XBu54nfzxAQ", "TlB_eWDSMt4", "WpA-S5gX61s", "zaCJffoFfC4"],
-        # Fallback/generic videos for other topics
-        "default": ["1GWpC0lywZs", "ZWI4_gDdHRE", "YG_-3XAr1CA", "C72WkcUZvco"]
-    }
-    
-    # Extract key terms from the topic
-    topic_lower = topic.lower()
-    
-    # Try to find a matching video
-    for key, videos in video_map.items():
-        if key in topic_lower:
-            # Use seed to pick a consistent but "random" video from the list
-            return videos[seed % len(videos)]
-    
-    # Fallback to default videos
-    return video_map["default"][seed % len(video_map["default"])]
 
 if __name__ == "__main__":
     import uvicorn # type: ignore

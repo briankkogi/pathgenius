@@ -13,19 +13,9 @@ import { db } from "@/lib/firebase"
 import { useFirebase } from "@/contexts/FirebaseContext"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
+import { CourseModule, Course } from "@/app/types/course"
 
 // Define interfaces to fix type errors
-interface CourseModule {
-  id: number;
-  title: string;
-  type: string;
-  duration: string;
-  description: string;
-  videoId?: string;
-  content?: string;
-  progress: number;
-}
-
 interface CourseData {
   modules: number;
   initialProgress: number;
@@ -41,15 +31,8 @@ interface FirebaseCourseData {
   createdAt: string;
 }
 
-interface Course {
-  title: string;
-  progress: number;
-  content: CourseModule[];
-  modules?: number;
-}
-
 // Update to use typed record
-const coursesData: Record<string, CourseData> = {
+const coursesData: Record<string, {modules: number, initialProgress: number, content: CourseModule[]}> = {
   "1": {
     modules: 5,
     initialProgress: 0,
@@ -57,46 +40,34 @@ const coursesData: Record<string, CourseData> = {
       {
         id: 1,
         title: "Introduction to Web Development",
-        type: "video",
-        duration: "15 minutes",
         description: "An overview of web development and its core technologies.",
-        videoId: "UB1O30fR-EE", // Example YouTube video ID
         progress: 0,
       },
       {
         id: 2,
         title: "HTML Basics",
-        type: "article",
-        duration: "20 minutes read",
         description: "Learn the fundamentals of HTML and document structure.",
         progress: 0,
       },
       {
         id: 3,
         title: "CSS Fundamentals",
-        type: "video",
-        duration: "25 minutes",
         description: "Understand how to style web pages using CSS.",
-        videoId: "yfoY53QXEnI", // Example YouTube video ID
         progress: 0,
       },
       {
         id: 4,
         title: "JavaScript Essentials",
-        type: "article",
-        duration: "30 minutes read",
         description: "Get started with JavaScript programming for the web.",
         progress: 0,
       },
       {
         id: 5,
         title: "Building Your First Webpage",
-        type: "exercise",
-        duration: "45 minutes",
         description: "Apply your knowledge to create a simple webpage.",
         progress: 0,
       },
-    ],
+    ]
   },
   // Add more courses as needed
 }
@@ -104,8 +75,8 @@ const coursesData: Record<string, CourseData> = {
 export default function CoursePage() {
   const params = useParams()
   const searchParams = useSearchParams()
-  const courseId = params.id as string
-  const learningGoal = searchParams.get("goal") || "Your Course"
+  const courseId = params?.id as string || "1"
+  const learningGoal = searchParams?.get("goal") || "Your Course"
   const [course, setCourse] = useState<Course | null>(null)
   const [completedModules, setCompletedModules] = useState<number[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -122,6 +93,23 @@ export default function CoursePage() {
         
         if (courseDoc.exists()) {
           const courseData = courseDoc.data() as FirebaseCourseData
+          
+          // Add detailed logging for debugging
+          console.log("Retrieved course data:", courseData)
+          console.log("Course modules:", courseData.modules)
+          
+          // Check module structure
+          if (courseData.modules && courseData.modules.length > 0) {
+            console.log("First module:", courseData.modules[0])
+            
+            if (courseData.modules[0]?.topics && courseData.modules[0]?.topics.length > 0) {
+              console.log("First topic:", courseData.modules[0]?.topics[0])
+              console.log("First topic content preview:", 
+                courseData.modules[0]?.topics[0]?.content ? 
+                courseData.modules[0]?.topics[0]?.content.substring(0, 100) + "..." : 
+                "No content")
+            }
+          }
           
           // Ensure this course belongs to the user
           if (courseData.userId === user.uid) {
@@ -265,34 +253,20 @@ interface ModuleCardProps {
 }
 
 function ModuleCard({ courseId, module, isCompleted }: ModuleCardProps) {
-  const getIcon = (type: string) => {
-    switch (type) {
-      case "video":
-        return <Video className="h-6 w-6" />
-      case "article":
-        return <FileText className="h-6 w-6" />
-      case "exercise":
-        return <PenTool className="h-6 w-6" />
-      default:
-        return <BookOpen className="h-6 w-6" />
-    }
-  }
-
   return (
     <Card className={`transition-all duration-300 hover:shadow-md ${isCompleted ? "bg-primary/5" : ""}`}>
       <CardContent className="p-6">
         <div className="flex items-start space-x-4">
           <div className={`p-2 rounded-full ${isCompleted ? "bg-primary" : "bg-muted"}`}>
-            {isCompleted ? <CheckCircle className="h-6 w-6 text-primary-foreground" /> : getIcon(module.type)}
+            {isCompleted ? 
+              <CheckCircle className="h-6 w-6 text-primary-foreground" /> : 
+              <BookOpen className="h-6 w-6" />
+            }
           </div>
           <div className="flex-grow">
             <h3 className="text-lg font-semibold mb-2">{module.title}</h3>
             <p className="text-sm text-muted-foreground mb-4">{module.description}</p>
             <div className="flex items-center space-x-4 text-sm text-muted-foreground">
-              <div className="flex items-center">
-                <Clock className="h-4 w-4 mr-1" />
-                {module.duration}
-              </div>
               <div className="flex items-center">
                 <BarChart className="h-4 w-4 mr-1" />
                 {isCompleted ? "Completed" : "Not started"}
