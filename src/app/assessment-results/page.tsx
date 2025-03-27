@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { motion } from "framer-motion"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, CheckCircle2, AlertTriangle, BookText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -14,6 +14,12 @@ import { toast } from "sonner"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "./components/Badge"
 
+// Add interfaces for module recommendations
+interface ModuleRecommendation {
+  title: string;
+  topics: string[];
+}
+
 interface AssessmentData {
   learningGoal: string;
   professionLevel: string;
@@ -22,6 +28,9 @@ interface AssessmentData {
   nextSteps: string;
   completedAt: string;
   userId: string;
+  strengths: string[];
+  knowledgeGaps: any[];
+  recommendedModules?: ModuleRecommendation[];
 }
 
 export default function AssessmentResults() {
@@ -48,7 +57,7 @@ export default function AssessmentResults() {
       
       try {
         // Fetch the assessment data from Firestore
-        const assessmentDoc = await getDoc(doc(db, `users/${user.uid}/assessments`, assessmentId));
+        const assessmentDoc = await getDoc(doc(db, "assessments", assessmentId));
         
         if (!assessmentDoc.exists()) {
           setError("Assessment not found.");
@@ -63,6 +72,34 @@ export default function AssessmentResults() {
           setError("You don't have permission to access this assessment.");
           setIsLoading(false);
           return;
+        }
+        
+        console.log("Loaded assessment data:", assessmentData);
+        
+        // Check if we have all the required fields
+        if (!assessmentData.feedback || assessmentData.feedback.trim() === '') {
+          console.warn("Assessment is missing feedback");
+          assessmentData.feedback = `Based on your assessment for ${assessmentData.learningGoal}, we've created a personalized learning path to help you build your skills.`;
+        }
+        
+        if (!assessmentData.nextSteps || assessmentData.nextSteps.trim() === '') {
+          console.warn("Assessment is missing nextSteps");
+          assessmentData.nextSteps = `Follow the recommended modules to build your understanding of ${assessmentData.learningGoal}. These modules are specifically designed to address your current knowledge level.`;
+        }
+        
+        // Enhanced logging for recommended modules
+        if (!assessmentData.recommendedModules || assessmentData.recommendedModules.length === 0) {
+          console.warn("Assessment is missing recommendedModules");
+        } else {
+          console.log(`Found ${assessmentData.recommendedModules.length} recommended modules:`);
+          assessmentData.recommendedModules.forEach((module, index) => {
+            console.log(`Module ${index+1}: ${module.title} with ${module.topics?.length || 0} topics`);
+            if (module.topics?.length > 0) {
+              console.log(`  Topics: ${module.topics.join(', ')}`);
+            } else {
+              console.warn(`  Module ${index+1} has no topics`);
+            }
+          });
         }
         
         setAssessment(assessmentData);
@@ -193,7 +230,7 @@ export default function AssessmentResults() {
               Return to Dashboard
             </Button>
             <Button 
-              onClick={() => router.push(`/loading-curation?goal=${encodeURIComponent(assessment.learningGoal)}&assessment=${assessmentId}`)}
+              onClick={() => router.push(`/loading-curation?goal=${encodeURIComponent(assessment.learningGoal)}&assessment=${assessmentId}&useModules=true`)}
               className="gap-2"
             >
               <span>Start Learning</span>
@@ -201,6 +238,52 @@ export default function AssessmentResults() {
             </Button>
           </CardFooter>
         </Card>
+        
+        {/* New Section: Recommended Learning Modules */}
+        {assessment.recommendedModules && assessment.recommendedModules.length > 0 && (
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <BookText className="h-5 w-5 text-primary" />
+                Recommended Learning Modules
+              </CardTitle>
+              <CardDescription>
+                Based on your assessment, we've created a personalized learning path
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-6">
+                {assessment.recommendedModules.map((module, index) => (
+                  <div key={index} className="p-4 border rounded-lg bg-background">
+                    <h3 className="text-lg font-semibold mb-2">
+                      Module {index + 1}: {module.title}
+                    </h3>
+                    {module.topics && module.topics.length > 0 ? (
+                      <ul className="space-y-1 list-disc pl-5">
+                        {module.topics.map((topic, topicIndex) => (
+                          <li key={topicIndex} className="text-muted-foreground">
+                            {topic}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-muted-foreground italic">Topics will be available when you start this module</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+            <CardFooter>
+              <Button 
+                onClick={() => router.push(`/loading-curation?goal=${encodeURIComponent(assessment.learningGoal)}&assessment=${assessmentId}`)}
+                className="w-full gap-2"
+              >
+                <span>Start Learning Path</span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </CardFooter>
+          </Card>
+        )}
       </motion.div>
     </div>
   );

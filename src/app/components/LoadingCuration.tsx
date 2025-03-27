@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Loader2, BookOpen } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { funQuotes } from "@/lib/constants"
 import { useFirebase } from "@/contexts/FirebaseContext"
-import { doc, collection, setDoc } from "firebase/firestore"
+import { doc, collection, setDoc, getDoc, query, where, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 
 interface LoadingCurationProps {
@@ -21,10 +21,33 @@ export default function LoadingCuration({ learningGoal, assessmentId }: LoadingC
   const [courseId, setCourseId] = useState<string | null>(null)
   const router = useRouter()
   const { user } = useFirebase()
+  const isRequestInProgress = useRef(false)
 
   const handleQuoteChange = useCallback(() => {
     setQuoteIndex((prevIndex) => (prevIndex + 1) % funQuotes.length)
   }, [])
+
+  const checkExistingCourse = async (userId: string, goal: string) => {
+    try {
+      const coursesRef = collection(db, "courses");
+      const q = query(
+        coursesRef, 
+        where("userId", "==", userId),
+        where("learningGoal", "==", goal)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      
+      if (!querySnapshot.empty) {
+        return querySnapshot.docs[0].id;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error("Error checking for existing course:", error);
+      return null;
+    }
+  };
 
   useEffect(() => {
     const quoteInterval = setInterval(handleQuoteChange, 5000)
@@ -38,20 +61,68 @@ export default function LoadingCuration({ learningGoal, assessmentId }: LoadingC
 
   useEffect(() => {
     const generateCourse = async () => {
-      if (!user) return
+      if (!user || isRequestInProgress.current) return
       
       try {
-        // Call our new FastAPI endpoint to generate a course
+        // Set flag to prevent concurrent requests
+        isRequestInProgress.current = true
+        
+        // First check if a course already exists
+        const existingCourseId = await checkExistingCourse(user.uid, learningGoal)
+        
+        if (existingCourseId) {
+          console.log("Found existing course, redirecting to:", existingCourseId)
+          setCourseId(existingCourseId)
+          setIsLoading(false)
+          return
+        }
+        
+        console.log("Generating new course for:", learningGoal)
+        
+        // Get recommended modules from assessment if available
+        let recommendedModules: any[] = []
+        
+        if (assessmentId) {
+          try {
+            const assessmentDoc = await getDoc(doc(db, "assessments", assessmentId))
+            if (assessmentDoc.exists()) {
+              const assessmentData = assessmentDoc.data()
+              console.log("Found assessment data:", assessmentData);
+              
+              // Log the recommended modules specifically
+              if (assessmentData.recommendedModules && assessmentData.recommendedModules.length > 0) {
+                console.log(`Found ${assessmentData.recommendedModules.length} recommended modules:`, 
+                  assessmentData.recommendedModules);
+                recommendedModules = assessmentData.recommendedModules;
+              } else {
+                console.warn("Assessment exists but has no recommended modules");
+              }
+            } else {
+              console.warn(`Assessment with ID ${assessmentId} not found`);
+            }
+          } catch (error) {
+            console.error("Error fetching assessment data:", error)
+          }
+        }
+        
+        // Generate a unique request ID to log and track this specific request
+        const requestId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+        
+        // Make the API request with recommended modules
         const response = await fetch('http://localhost:8000/api/curate-course', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'X-Request-ID': requestId,
           },
           body: JSON.stringify({
             learningGoal,
-            professionLevel: "beginner", // Default to beginner if not available
+            professionLevel: "beginner",
             userId: user.uid,
-            assessmentId
+            assessmentId,
+            formatForFirebase: true,
+            requestId,
+            recommendedModules // Include the recommended modules
           })
         })
         
@@ -82,6 +153,8 @@ export default function LoadingCuration({ learningGoal, assessmentId }: LoadingC
         console.error("Error generating course:", error)
         // End loading even if there's an error
         setIsLoading(false)
+      } finally {
+        isRequestInProgress.current = false
       }
     }
     

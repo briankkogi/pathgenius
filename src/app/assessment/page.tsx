@@ -203,19 +203,15 @@ export default function Assessment() {
         // Create a new assessment document in the user's assessments collection
         const assessmentRef = doc(collection(db, `users/${user.uid}/assessments`));
         
-        await setDoc(assessmentRef, {
+        await setDoc(doc(db, "assessments", assessmentRef.id), {
+          userId: user.uid,
           learningGoal,
           professionLevel,
-          answers,
           score: evalData.score,
           feedback: evalData.feedback,
           nextSteps: evalData.nextSteps,
-          strengths: evalData.strengths || [],
-          knowledgeGaps: evalData.knowledgeGaps || [],
-          completedAt: new Date().toISOString(),
-          userId: user.uid,
-          sessionId: sessionId,
-          status: "completed",
+          recommendedModules: evalData.recommendedModules,
+          completedAt: new Date().toISOString()
         });
 
         // Update user's profile with latest assessment
@@ -247,8 +243,7 @@ export default function Assessment() {
           score: evalData.score,
           feedback: evalData.feedback,
           nextSteps: evalData.nextSteps,
-          strengths: evalData.strengths || [],
-          knowledgeGaps: evalData.knowledgeGaps || [],
+          recommendedModules: evalData.recommendedModules,
           assessmentId: assessmentRef.id
         });
 
