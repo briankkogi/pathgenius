@@ -34,6 +34,8 @@
     --ring: 222.2 84% 4.9%;
 
     --radius: 0.5rem;
+
+    --font-size-adjustment: 1rem;
   }
 
   .dark {
@@ -151,5 +153,33 @@
 
 .sidebar:hover.sidebar-collapsed {
   width: 240px;
+}
+
+.font-adjustment {
+  font-size: var(--font-size-adjustment);
+}
+
+.font-adjustment h1 {
+  font-size: calc(1.875rem * (var(--font-size-adjustment) / 1rem));
+}
+
+.font-adjustment h2, .font-adjustment .text-2xl {
+  font-size: calc(1.5rem * (var(--font-size-adjustment) / 1rem));
+}
+
+.font-adjustment h3, .font-adjustment .text-xl {
+  font-size: calc(1.25rem * (var(--font-size-adjustment) / 1rem));
+}
+
+.font-adjustment .text-lg {
+  font-size: calc(1.125rem * (var(--font-size-adjustment) / 1rem));
+}
+
+.font-adjustment .text-sm {
+  font-size: calc(0.875rem * (var(--font-size-adjustment) / 1rem));
+}
+
+.font-adjustment .text-xs {
+  font-size: calc(0.75rem * (var(--font-size-adjustment) / 1rem));
 }
 

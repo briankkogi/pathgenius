@@ -24,9 +24,13 @@ export interface CourseModule {
   content?: string;
   videoId?: string;
   quiz?: QuizQuestion[];
+  // Add completedTopics for progress tracking
+  completedTopics?: number[];
 }
 
 export interface Course {
+  // Add id property
+  id?: string;
   title: string;
   progress: number;
   content: CourseModule[];

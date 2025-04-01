@@ -9,7 +9,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Menu, ChevronLeft, ChevronRight, LogOut, Home, BookOpen, BarChart, Settings } from "lucide-react"
+import { Menu, ChevronLeft, ChevronRight, LogOut, Home, BookOpen, BarChart } from "lucide-react"
 import { useFirebase } from "@/contexts/FirebaseContext"
 import { signOut } from "firebase/auth"
 import { auth, db } from "@/lib/firebase"
@@ -18,12 +18,26 @@ import { toast } from "sonner"
 import { doc, getDoc } from "firebase/firestore"
 import { useEffect } from "react"
 
-const menuItems = [
+// Define the menu item interface
+interface MenuItem {
+  icon: React.ElementType;
+  label: string;
+  href: string;
+}
+
+const menuItems: MenuItem[] = [
   { icon: Home, label: "Overview", href: "/dashboard" },
   { icon: BookOpen, label: "My Courses", href: "/dashboard/courses" },
   { icon: BarChart, label: "Progress", href: "/dashboard/progress" },
-  { icon: Settings, label: "Settings", href: "/dashboard/settings" },
 ]
+
+// Define type for user data
+interface UserData {
+  name?: string;
+  email?: string;
+  displayName?: string;
+  [key: string]: any; // Allow other properties
+}
 
 interface DashboardSidebarProps {
   isCollapsed: boolean
@@ -32,7 +46,7 @@ interface DashboardSidebarProps {
 
 const DashboardSidebar = ({ isCollapsed, toggleSidebar }: DashboardSidebarProps) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const [userData, setUserData] = useState<any>(null)
+  const [userData, setUserData] = useState<UserData | null>(null)
   const pathname = usePathname()
   const { user } = useFirebase()
   const router = useRouter()
@@ -150,7 +164,14 @@ const DashboardSidebar = ({ isCollapsed, toggleSidebar }: DashboardSidebarProps)
   )
 }
 
-function NavItem({ item, isActive, isCollapsed }) {
+// Add type definitions for NavItem props
+interface NavItemProps {
+  item: MenuItem;
+  isActive: boolean;
+  isCollapsed: boolean;
+}
+
+function NavItem({ item, isActive, isCollapsed }: NavItemProps) {
   return (
     <TooltipProvider>
       <Tooltip>
@@ -188,7 +209,13 @@ function NavItem({ item, isActive, isCollapsed }) {
   )
 }
 
-function MobileMenu({ setIsMobileMenuOpen, userData }) {
+// Add type definitions for MobileMenu props
+interface MobileMenuProps {
+  setIsMobileMenuOpen: (open: boolean) => void;
+  userData: UserData | null;
+}
+
+function MobileMenu({ setIsMobileMenuOpen, userData }: MobileMenuProps) {
   const pathname = usePathname()
   const { user } = useFirebase()
   const router = useRouter()

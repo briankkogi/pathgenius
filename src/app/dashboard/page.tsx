@@ -8,71 +8,141 @@ import { Button } from "@/components/ui/button"
 import { BookOpen, Award, TrendingUp, Plus, ArrowRight } from "lucide-react"
 import Link from "next/link"
 import { useFirebase } from "@/contexts/FirebaseContext"
-import { doc, getDoc } from "firebase/firestore"
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { Skeleton } from "@/components/ui/skeleton"
 
 interface UserData {
   name: string
   email: string
-  overallProgress?: number
-  coursesInProgress?: number
-  coursesCompleted?: number
+  initialLearningGoal?: string
+  topics?: Record<string, { professionLevel: string, addedAt: string }>
 }
 
 interface Course {
-  id: number
+  id: string
   title: string
   progress: number
+  learningGoal: string
 }
 
-const initialCourses: Course[] = [
-  { id: 1, title: "Introduction to AI", progress: 0 },
-  { id: 2, title: "Machine Learning Basics", progress: 30 },
-  { id: 3, title: "Data Structures and Algorithms", progress: 75 },
-  { id: 4, title: "Web Development Fundamentals", progress: 0 },
-]
-
 export default function Dashboard() {
-  const [courses, setCourses] = useState<Course[]>(initialCourses)
+  const [courses, setCourses] = useState<Course[]>([])
   const [userData, setUserData] = useState<UserData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   const { user } = useFirebase()
 
   useEffect(() => {
     const fetchUserData = async () => {
       if (user) {
         try {
+          setIsLoading(true);
+          
+          // Fetch user profile data
           const userDoc = await getDoc(doc(db, "users", user.uid))
+          let userProfile: UserData | null = null;
+          
           if (userDoc.exists()) {
-            setUserData({
-              ...userDoc.data() as UserData,
-              overallProgress: 100,
-              coursesInProgress: 3,
-              coursesCompleted: 2,
-            })
+            userProfile = userDoc.data() as UserData;
+            // Use displayName from Firebase Auth as fallback
+            if (!userProfile.name && user.displayName) {
+              userProfile.name = user.displayName;
+            }
+            // Use email from Firebase Auth as fallback
+            if (!userProfile.email && user.email) {
+              userProfile.email = user.email;
+            }
+            setUserData(userProfile);
+          } else {
+            // Create basic user profile if it doesn't exist
+            userProfile = {
+              name: user.displayName || "User",
+              email: user.email || ""
+            };
+            setUserData(userProfile);
           }
+          
+          // Fetch user's courses
+          const coursesRef = collection(db, "courses");
+          const q = query(coursesRef, where("userId", "==", user.uid));
+          const querySnapshot = await getDocs(q);
+          
+          const userCourses: Course[] = [];
+          querySnapshot.forEach((doc) => {
+            const courseData = doc.data();
+            userCourses.push({
+              id: doc.id,
+              title: courseData.title || "Untitled Course",
+              progress: courseData.progress || 0,
+              learningGoal: courseData.learningGoal || "General Learning"
+            });
+          });
+          
+          setCourses(userCourses);
         } catch (error) {
-          console.error("Error fetching user data:", error)
+          console.error("Error fetching data:", error);
+        } finally {
+          setIsLoading(false);
         }
       }
-    }
-    fetchUserData()
-  }, [user])
+    };
+    
+    fetchUserData();
+  }, [user]);
+
+  // Calculate overall stats
+  const overallProgress = courses.length > 0 
+    ? Math.round(courses.reduce((sum, course) => sum + course.progress, 0) / courses.length) 
+    : 0;
+    
+  const coursesInProgress = courses.filter(course => course.progress > 0 && course.progress < 100).length;
+  const coursesCompleted = courses.filter(course => course.progress === 100).length;
+
+  if (isLoading) {
+    return <DashboardSkeleton />;
+  }
 
   if (!userData) {
-    return null // Or a loading spinner
+    return null; // Or a better fallback UI
   }
 
   return (
     <div className="space-y-8">
-      <DashboardHeader name={userData.name} />
-      <StatsSection userData={userData} />
+      <DashboardHeader name={userData.name || "User"} />
+      <StatsSection 
+        overallProgress={overallProgress}
+        coursesInProgress={coursesInProgress}
+        coursesCompleted={coursesCompleted}
+      />
       <CoursesSection courses={courses} />
     </div>
-  )
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-8">
+      <div className="flex justify-between items-center">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-10 w-32" />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {[1, 2, 3].map(i => (
+          <Skeleton key={i} className="h-36 w-full rounded-lg" />
+        ))}
+      </div>
+      <Skeleton className="h-8 w-36 my-4" />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {[1, 2, 3, 4].map(i => (
+          <Skeleton key={i} className="h-48 w-full rounded-lg" />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 interface DashboardHeaderProps {
-  name: string
+  name: string;
 }
 
 function DashboardHeader({ name }: DashboardHeaderProps) {
@@ -92,37 +162,39 @@ function DashboardHeader({ name }: DashboardHeaderProps) {
         </Button>
       </Link>
     </div>
-  )
+  );
 }
 
 interface StatsSectionProps {
-  userData: UserData
+  overallProgress: number;
+  coursesInProgress: number;
+  coursesCompleted: number;
 }
 
-function StatsSection({ userData }: StatsSectionProps) {
+function StatsSection({ overallProgress, coursesInProgress, coursesCompleted }: StatsSectionProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       <ProgressCard
         title="Overall Progress"
-        value={userData.overallProgress || 0}
+        value={overallProgress}
         icon={<TrendingUp className="h-6 w-6" />}
       />
       <StatsCard
         title="Courses in Progress"
-        value={userData.coursesInProgress || 0}
+        value={coursesInProgress}
         icon={<BookOpen className="h-6 w-6" />}
       />
       <StatsCard 
         title="Courses Completed" 
-        value={userData.coursesCompleted || 0} 
+        value={coursesCompleted}
         icon={<Award className="h-6 w-6" />} 
       />
     </div>
-  )
+  );
 }
 
 interface CoursesSectionProps {
-  courses: Course[]
+  courses: Course[];
 }
 
 function CoursesSection({ courses }: CoursesSectionProps) {
@@ -136,19 +208,28 @@ function CoursesSection({ courses }: CoursesSectionProps) {
       >
         Your Courses
       </motion.h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {courses.map((course, index) => (
-          <CourseCard key={course.id} course={course} index={index} />
-        ))}
-      </div>
+      {courses.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {courses.map((course, index) => (
+            <CourseCard key={course.id} course={course} index={index} />
+          ))}
+        </div>
+      ) : (
+        <Card className="p-6 text-center">
+          <p className="text-muted-foreground mb-4">You don't have any courses yet.</p>
+          <Button asChild>
+            <Link href="/onboarding?mode=add-course">Add Your First Course</Link>
+          </Button>
+        </Card>
+      )}
     </>
-  )
+  );
 }
 
 interface CardProps {
-  title: string
-  value: number
-  icon: React.ReactNode
+  title: string;
+  value: number;
+  icon: React.ReactNode;
 }
 
 function ProgressCard({ title, value, icon }: CardProps) {
@@ -163,7 +244,7 @@ function ProgressCard({ title, value, icon }: CardProps) {
         <Progress value={value} className="mt-2" />
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function StatsCard({ title, value, icon }: CardProps) {
@@ -177,12 +258,12 @@ function StatsCard({ title, value, icon }: CardProps) {
         <div className="text-2xl font-bold">{value}</div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 interface CourseCardProps {
-  course: Course
-  index: number
+  course: Course;
+  index: number;
 }
 
 function CourseCard({ course, index }: CourseCardProps) {
@@ -207,6 +288,6 @@ function CourseCard({ course, index }: CourseCardProps) {
         </CardContent>
       </Card>
     </motion.div>
-  )
+  );
 }
 

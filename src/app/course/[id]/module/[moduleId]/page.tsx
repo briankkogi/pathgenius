@@ -30,7 +30,7 @@ interface FirebaseCourseData {
   createdAt: string;
 }
 
-// Keep the mock data as fallback
+//mock data as fallback
 const coursesData = {
   1: {
     modules: [
@@ -133,6 +133,8 @@ export default function ModulePage() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("content")
   const { user } = useFirebase()
+  // Add a state to track if we've checked for authentication
+  const [authChecked, setAuthChecked] = useState(false)
 
   // For quiz functionality
   const [quizAnswers, setQuizAnswers] = useState<number[]>([])
@@ -142,41 +144,69 @@ export default function ModulePage() {
   // Create topics array from module content if needed
   const [topics, setTopics] = useState<ModuleTopic[]>([])
   
+  // Add a separate effect to check for authentication state
+  useEffect(() => {
+    // This will run when the user state changes
+    // Firebase will set user to null if not authenticated
+    // and to the user object when authenticated
+    
+    // We only want to show the error if we're sure authentication is complete
+    // and the user is not available
+    if (user === null) {
+      // User is definitely not authenticated
+      setError("Please sign in to view this module");
+      setAuthChecked(true);
+    } else if (user) {
+      // User is authenticated, clear any auth error
+      setError(null);
+      setAuthChecked(true);
+    }
+    // If user is undefined, we're still initializing, don't set error yet
+  }, [user]);
+
   useEffect(() => {
     const fetchModule = async () => {
       try {
-        if (!user) return;
+        setIsLoading(true);
         
+        // Only proceed with fetching data if user is available
+        if (!user) {
+          // Don't set an error here, as the auth check effect will handle it
+          setIsLoading(false);
+          return;
+        }
+        
+        // Load course from Firebase
         const courseDoc = await getDoc(doc(db, "courses", courseId));
         
         if (courseDoc.exists()) {
           const courseData = courseDoc.data() as FirebaseCourseData;
           
-          // Ensure this course belongs to the user
+          // Check if user has access to this course
           if (courseData.userId === user.uid) {
-            // Find the specific module by ID
-            const moduleIndex = parseInt(moduleId) - 1;
-            const moduleData = courseData.modules[moduleIndex];
+            // Find the module by ID
+            const moduleIndex = courseData.modules.findIndex(
+              m => m.id.toString() === moduleId.toString()
+            );
             
-            if (moduleData) {
-              setModule(moduleData);
-              
-              // Explicitly log the retrieved module data for debugging
-              console.log("Retrieved module data:", moduleData);
-              console.log("Module topics:", moduleData.topics);
-              
-              // Normalize the module structure
+            if (moduleIndex !== -1) {
+              const moduleData = courseData.modules[moduleIndex];
               const normalizedModule = {
                 ...moduleData,
                 id: moduleData.id || moduleIndex + 1,
                 title: moduleData.title || `Module ${moduleIndex + 1}`,
                 description: moduleData.description || `Module ${moduleIndex + 1} content`,
-                quiz: moduleData.quiz || []
+                progress: moduleData.progress || 0,
+                // Load completed topics if available
+                completedTopics: moduleData.completedTopics || []
               };
+              
+              setModule(normalizedModule);
+              setProgress(normalizedModule.progress || 0);
               
               // Check if module has topics property
               if (normalizedModule.topics && normalizedModule.topics.length > 0) {
-                // Normalize each topic to ensure it has all required fields, removing type and duration
+                // Normalize each topic to ensure it has all required fields
                 const normalizedTopics = normalizedModule.topics.map((topic: ModuleTopic) => {
                   return {
                     id: topic.id || `${normalizedModule.id}-1`,
@@ -185,8 +215,11 @@ export default function ModulePage() {
                   };
                 });
                 
-                console.log("Normalized topics:", normalizedTopics);
                 setTopics(normalizedTopics);
+                
+                // Check if we should restore a specific topic index (e.g., from a saved state)
+                // If not, just start from the first topic
+                setCurrentTopicIndex(0);
               } else {
                 // Create default topics if none exist
                 const defaultTopics = [
@@ -205,45 +238,21 @@ export default function ModulePage() {
             setError("You don't have permission to access this course");
           }
         } else {
-          // Fallback to mock data
-          const course = coursesData[parseInt(courseId) as keyof typeof coursesData]
-          if (course) {
-            const foundModule = course.modules.find(m => m.id.toString() === moduleId)
-            if (foundModule) {
-              // Create a properly shaped module object with all required properties
-              const mockModule: CourseModule = {
-                id: foundModule.id,
-                title: foundModule.title,
-                description: foundModule.description,
-                progress: foundModule.progress || 0,
-                topics: foundModule.topics,
-                quiz: foundModule.quiz || []
-              }
-              
-              setModule(mockModule)
-              setTopics(mockModule.topics || [])
-              
-              // Initialize quiz answers if there are quiz questions
-              if (mockModule.quiz && mockModule.quiz.length > 0) {
-                setQuizAnswers(new Array(mockModule.quiz.length).fill(-1))
-              }
-            } else {
-              setError("Module not found")
-            }
-          } else {
-            setError("Course not found")
-          }
+          setError("Course not found");
         }
       } catch (error) {
         console.error("Error fetching module:", error);
-        setError("Failed to load module content");
+        setError("Failed to load module");
       } finally {
         setIsLoading(false);
       }
-    }
+    };
     
-    fetchModule()
-  }, [courseId, moduleId, user])
+    // Only fetch module if user is available
+    if (courseId && moduleId && user) {
+      fetchModule();
+    }
+  }, [courseId, moduleId, user]);
 
   useEffect(() => {
     if (module) {
@@ -255,13 +264,87 @@ export default function ModulePage() {
     }
   }, [currentTopicIndex, module, topics])
 
-  const handleTopicNavigation = (direction: "prev" | "next") => {
-    if (direction === "prev" && currentTopicIndex > 0) {
-      setCurrentTopicIndex(currentTopicIndex - 1)
-    } else if (direction === "next" && currentTopicIndex < topics.length - 1) {
-      setCurrentTopicIndex(currentTopicIndex + 1)
+  const handleTopicNavigation = async (direction: "prev" | "next") => {
+    // Mark current topic as completed if navigating to next
+    if (direction === "next" && topics.length > 0) {
+      await markTopicAsCompleted(currentTopicIndex);
     }
-  }
+    
+    // Update current topic index
+    if (direction === "next" && currentTopicIndex < topics.length - 1) {
+      setCurrentTopicIndex(prevIndex => prevIndex + 1);
+      // Remove scrolling behavior
+    } else if (direction === "prev" && currentTopicIndex > 0) {
+      setCurrentTopicIndex(prevIndex => prevIndex - 1);
+      // Remove scrolling behavior
+    }
+  };
+
+  // Add a function to mark a topic as completed
+  const markTopicAsCompleted = async (topicIndex: number) => {
+    if (!user || !module || topicIndex >= topics.length) return;
+    
+    try {
+      // Get the current topic
+      const topic = topics[topicIndex];
+      
+      // Update module progress in Firebase
+      const courseRef = doc(db, "courses", courseId);
+      const courseDoc = await getDoc(courseRef);
+      
+      if (courseDoc.exists()) {
+        const courseData = courseDoc.data();
+        const modules = courseData.modules || [];
+        
+        // Find the module being updated
+        const moduleIndex = modules.findIndex((m: any) => 
+          m.id.toString() === moduleId.toString()
+        );
+        
+        if (moduleIndex !== -1) {
+          // Calculate completed topics
+          const completedTopics = new Set([
+            ...(modules[moduleIndex].completedTopics || []),
+            topicIndex
+          ]);
+          
+          // Update the module with completed topics
+          modules[moduleIndex].completedTopics = Array.from(completedTopics);
+          
+          // Calculate module progress (percentage of completed topics)
+          const totalTopics = topics.length;
+          const completedCount = completedTopics.size;
+          const moduleProgress = Math.round((completedCount / totalTopics) * 100);
+          
+          // Update module progress
+          modules[moduleIndex].progress = moduleProgress;
+          
+          // Calculate overall course progress (average of all module progress)
+          const totalProgress = modules.reduce(
+            (sum: number, mod: any) => sum + (mod.progress || 0), 
+            0
+          );
+          const courseProgress = Math.round(totalProgress / modules.length);
+          
+          // Update Firebase with new progress data
+          await updateDoc(courseRef, {
+            modules: modules,
+            progress: courseProgress,
+            updatedAt: new Date().toISOString()
+          });
+          
+          // Update local state
+          setProgress(moduleProgress);
+          
+          // Show success notification
+          toast.success("Progress saved");
+        }
+      }
+    } catch (error) {
+      console.error("Error updating progress:", error);
+      toast.error("Failed to save progress");
+    }
+  };
 
   const navigateToModule = (direction: "prev" | "next") => {
     // Convert moduleId to number for comparison
@@ -347,7 +430,8 @@ export default function ModulePage() {
     )
   }
 
-  if (error || !module) {
+  // Only show auth error if we've checked auth state and user is not available
+  if ((authChecked && !user) || error) {
     return (
       <div className="container mx-auto px-4 py-8">
         <Alert variant="destructive">
@@ -357,6 +441,23 @@ export default function ModulePage() {
         <Button variant="outline" onClick={() => router.push(`/course/${courseId}`)} className="mt-4">
           <ArrowLeft className="mr-2 h-4 w-4" /> Back to Course
         </Button>
+      </div>
+    )
+  }
+
+  if (!module) {
+    return (
+      <div className="container max-w-7xl mx-auto px-4 py-8">
+        <Skeleton className="h-12 w-3/4 mb-6" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2">
+            <Skeleton className="h-[500px] w-full" />
+          </div>
+          <div className="space-y-6">
+            <Skeleton className="h-48 w-full" />
+            <Skeleton className="h-48 w-full" />
+          </div>
+        </div>
       </div>
     )
   }
@@ -408,8 +509,8 @@ export default function ModulePage() {
                   >
                     {topics.length > 0 ? (
                       topics.map((topic, index) => (
-                        <div key={topic.id} className={index === currentTopicIndex ? "block" : "hidden"}>
-                          <h3 className="text-2xl font-semibold mb-4">{topic.title}</h3>
+                      <div key={topic.id} className={index === currentTopicIndex ? "block" : "hidden"}>
+                        <h3 className="text-2xl font-semibold mb-4">{topic.title}</h3>
                           {('videoId' in topic) && topic.videoId ? (
                             <div className="space-y-4">
                               <div className="aspect-video rounded-lg overflow-hidden shadow-lg">
@@ -458,12 +559,58 @@ export default function ModulePage() {
                           {/* For single item modules without a topic list, don't show navigation */}
                           {topics.length > 1 && (
                             <div className="flex justify-between mt-6">
-                              <Button onClick={() => handleTopicNavigation("prev")} disabled={currentTopicIndex === 0}>
+                              <Button 
+                                onClick={() => handleTopicNavigation("prev")} 
+                                disabled={currentTopicIndex === 0}
+                                variant="outline"
+                              >
                                 <ArrowLeft className="mr-2 h-4 w-4" /> Previous Topic
                               </Button>
-                              <Button onClick={() => handleTopicNavigation("next")} disabled={currentTopicIndex === topics.length - 1}>
-                                Next Topic <ArrowRight className="ml-2 h-4 w-4" />
-                              </Button>
+                              
+                              {currentTopicIndex === topics.length - 1 ? (
+                                <Button 
+                                  onClick={async () => {
+                                    // Mark last topic as completed
+                                    await markTopicAsCompleted(currentTopicIndex);
+                                    
+                                    // Get the next module ID
+                                    const currentModuleId = parseInt(moduleId);
+                                    const nextModuleId = currentModuleId + 1;
+                                    
+                                    // Check if there's another module in the course
+                                    const courseRef = doc(db, "courses", courseId);
+                                    const courseDoc = await getDoc(courseRef);
+                                    
+                                    if (courseDoc.exists()) {
+                                      const courseData = courseDoc.data();
+                                      const totalModules = courseData.modules.length;
+                                      
+                                      // If there are more modules, navigate to the next one
+                                      if (nextModuleId <= totalModules) {
+                                        router.push(`/course/${courseId}/module/${nextModuleId}`);
+                                        toast.success("Module completed! Moving to the next module.");
+                                      } else {
+                                        // If this was the last module, go back to course page
+                                        router.push(`/course/${courseId}`);
+                                        toast.success("Congratulations! You've completed the final module.");
+                                      }
+                                    } else {
+                                      // Fallback if course data not found
+                                      router.push(`/course/${courseId}`);
+                                    }
+                                  }}
+                                  className="bg-green-600 hover:bg-green-700"
+                                >
+                                  Complete Module <CheckCircle className="ml-2 h-4 w-4" />
+                                </Button>
+                              ) : (
+                                <Button 
+                                  onClick={() => handleTopicNavigation("next")} 
+                                  disabled={currentTopicIndex === topics.length - 1}
+                                >
+                                  Next Topic <ArrowRight className="ml-2 h-4 w-4" />
+                                </Button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -532,7 +679,7 @@ export default function ModulePage() {
                     {module.quiz && module.quiz.length > 0 ? (
                       <>
                         {module.quiz.map((question: QuizQuestion, qIndex: number) => (
-                          <Card key={qIndex} className="p-4">
+                      <Card key={qIndex} className="p-4">
                             <CardContent>
                               <h4 className="font-semibold mb-4">{question.question}</h4>
                               <RadioGroup 
@@ -549,37 +696,37 @@ export default function ModulePage() {
                                       disabled={quizSubmitted}
                                     />
                                     <Label htmlFor={`q${qIndex}a${oIndex}`} className="text-sm">
-                                      {option}
+                                {option}
                                     </Label>
-                                    {quizSubmitted && oIndex === question.correctAnswer && (
+                              {quizSubmitted && oIndex === question.correctAnswer && (
                                       <CheckCircle className="h-4 w-4 text-green-500 ml-auto" />
-                                    )}
-                                  </div>
-                                ))}
+                              )}
+                            </div>
+                          ))}
                               </RadioGroup>
                               
                               {quizSubmitted && quizAnswers[qIndex] !== question.correctAnswer && (
                                 <div className="mt-2 text-sm text-red-500">
                                   Correct answer: {question.options[question.correctAnswer]}
-                                </div>
+                        </div>
                               )}
                             </CardContent>
-                          </Card>
-                        ))}
+                      </Card>
+                    ))}
                         
-                        {!quizSubmitted ? (
+                    {!quizSubmitted ? (
                           <Button 
                             onClick={handleQuizSubmit} 
                             disabled={quizAnswers.includes(-1)} 
                             className="w-full"
                           >
-                            Submit Quiz
-                          </Button>
-                        ) : (
-                          <Card className="p-4 bg-primary text-primary-foreground">
+                        Submit Quiz
+                      </Button>
+                    ) : (
+                      <Card className="p-4 bg-primary text-primary-foreground">
                             <CardContent>
-                              <div className="flex items-center justify-between">
-                                <span className="text-lg font-semibold">Quiz Result</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-lg font-semibold">Quiz Result</span>
                                 <span className="text-2xl font-bold">{quizScore}%</span>
                               </div>
                               <Progress value={quizScore} className="mt-2" />
@@ -597,8 +744,8 @@ export default function ModulePage() {
                               <Button onClick={() => setActiveTab("content")} className="w-full">
                                 Return to Content
                               </Button>
-                            </div>
-                          </Card>
+                        </div>
+                      </Card>
                         )}
                       </>
                     ) : (
@@ -647,24 +794,33 @@ export default function ModulePage() {
           </Card>
 
           {topics.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Module Contents</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ul className="space-y-2">
-                  {topics.map((topic, index) => (
-                    <li key={topic.id} className="flex items-center space-x-2">
-                      <FileText className="h-4 w-4 text-primary" />
-                      <span className={index <= currentTopicIndex ? "text-primary" : "text-muted-foreground"}>
-                        {topic.title}
-                      </span>
-                      {index < currentTopicIndex && <CheckCircle className="h-4 w-4 text-green-500" />}
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Module Contents</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2">
+                  {topics.map((topic, index) => {
+                    // Check if this topic is marked as completed
+                    const isCompleted = module?.completedTopics?.includes(index);
+                    
+                    return (
+                      <li 
+                        key={topic.id} 
+                        className={`flex items-center space-x-2 py-2 px-3 rounded-md cursor-pointer
+                          ${index === currentTopicIndex ? "bg-primary/10" : ""}
+                          ${isCompleted ? "text-primary" : "text-muted-foreground"}`}
+                        onClick={() => setCurrentTopicIndex(index)}
+                      >
+                        <FileText className="h-4 w-4" />
+                        <span className="truncate flex-1">{topic.title}</span>
+                        {isCompleted && <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />}
+                  </li>
+                    );
+                  })}
+              </ul>
+            </CardContent>
+          </Card>
           )}
 
           <Card>

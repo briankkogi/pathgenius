@@ -86,80 +86,70 @@ export default function CoursePage() {
   useEffect(() => {
     const fetchCourse = async () => {
       try {
-        if (!user) return
+        if (!user) return;
         
-        // First try to load from Firebase
-        const courseDoc = await getDoc(doc(db, "courses", courseId))
+        // Load course from Firebase
+        const courseDoc = await getDoc(doc(db, "courses", courseId));
         
         if (courseDoc.exists()) {
-          const courseData = courseDoc.data() as FirebaseCourseData
+          const courseData = courseDoc.data() as FirebaseCourseData;
           
-          // Add detailed logging for debugging
-          console.log("Retrieved course data:", courseData)
-          console.log("Course modules:", courseData.modules)
-          
-          // Check module structure
-          if (courseData.modules && courseData.modules.length > 0) {
-            console.log("First module:", courseData.modules[0])
-            
-            if (courseData.modules[0]?.topics && courseData.modules[0]?.topics.length > 0) {
-              console.log("First topic:", courseData.modules[0]?.topics[0])
-              console.log("First topic content preview:", 
-                courseData.modules[0]?.topics[0]?.content ? 
-                courseData.modules[0]?.topics[0]?.content.substring(0, 100) + "..." : 
-                "No content")
-            }
-          }
-          
-          // Ensure this course belongs to the user
+          // Check if course belongs to the user
           if (courseData.userId === user.uid) {
-            setCourse({
-              title: courseData.title || decodeURIComponent(learningGoal),
-              progress: courseData.progress || 0,
-              content: courseData.modules || []
-            })
+            console.log("Retrieved course data:", courseData);
             
-            // Calculate completed modules
-            if (courseData.progress) {
-              const moduleCount = courseData.modules.length
-              const initialCompletedModules = Array.from(
-                { length: Math.floor((courseData.progress / 100) * moduleCount) },
-                (_, index) => index,
-              )
-              setCompletedModules(initialCompletedModules)
-            }
+            // Prepare the course object
+            const course: Course = {
+              id: courseId,
+              title: courseData.title || `Course on ${learningGoal}`,
+              progress: courseData.progress || 0,
+              content: courseData.modules.map((module: CourseModule) => ({
+                id: module.id,
+                title: module.title,
+                description: module.description,
+                progress: module.progress || 0,
+                topics: module.topics || []
+              }))
+            };
+            
+            setCourse(course);
+            
+            // Calculate which modules are completed (100% progress)
+            const completedModuleIndices = courseData.modules
+              .map((module: CourseModule, index: number) => 
+                (module.progress || 0) === 100 ? index : -1)
+              .filter((index: number) => index !== -1);
+              
+            setCompletedModules(completedModuleIndices);
           } else {
-            setError("You don't have permission to access this course")
+            setError("You don't have permission to view this course");
           }
         } else {
-          // Fallback to mock data - make sure courseId is directly usable as a key
+          // If not found in Firebase, try to load from mock data
           if (coursesData[courseId]) {
-            setCourse({
-              title: decodeURIComponent(learningGoal),
-              progress: coursesData[courseId].initialProgress,
-              content: coursesData[courseId].content,
-              modules: coursesData[courseId].modules
-            })
+            const mockData = coursesData[courseId];
+            const mockCourse = {
+              id: courseId,
+              title: `Course on ${learningGoal}`,
+              progress: mockData.initialProgress,
+              content: mockData.content
+            };
             
-            const initialCompletedModules = Array.from(
-              { length: Math.floor((coursesData[courseId].initialProgress / 100) * coursesData[courseId].modules) },
-              (_, index) => index,
-            )
-            setCompletedModules(initialCompletedModules)
+            setCourse(mockCourse);
           } else {
-            setError("Course not found")
+            setError("Course not found");
           }
         }
-      } catch (err) {
-        console.error("Error loading course:", err)
-        setError("Failed to load course")
+      } catch (error) {
+        console.error("Error fetching course:", error);
+        setError("Failed to load course");
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
-    }
+    };
     
-    fetchCourse()
-  }, [courseId, learningGoal, user])
+    fetchCourse();
+  }, [courseId, learningGoal, user]);
 
   if (isLoading) {
     return (
@@ -269,12 +259,15 @@ function ModuleCard({ courseId, module, isCompleted }: ModuleCardProps) {
             <div className="flex items-center space-x-4 text-sm text-muted-foreground">
               <div className="flex items-center">
                 <BarChart className="h-4 w-4 mr-1" />
-                {isCompleted ? "Completed" : "Not started"}
+                {isCompleted ? "Completed" : 
+                  module.progress > 0 ? `${module.progress}% complete` : "Not started"}
               </div>
             </div>
           </div>
           <Button variant={isCompleted ? "outline" : "default"} asChild>
-            <Link href={`/course/${courseId}/module/${module.id}`}>{isCompleted ? "Review" : "Start"}</Link>
+            <Link href={`/course/${courseId}/module/${module.id}`}>
+              {isCompleted ? "Review" : module.progress > 0 ? "Continue" : "Start"}
+            </Link>
           </Button>
         </div>
         {!isCompleted && (
