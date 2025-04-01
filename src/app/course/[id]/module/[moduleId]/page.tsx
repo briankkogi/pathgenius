@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ArrowLeft, ArrowRight, CheckCircle, Video, FileText, MessageSquare, BookOpen, PenTool } from "lucide-react"
+import { ArrowLeft, ArrowRight, CheckCircle, Video, FileText, MessageSquare, BookOpen, PenTool, Loader2, CheckCircle2, AlertTriangle } from "lucide-react"
 import YouTube from "react-youtube"
 import { AIChatBox } from "@/components/AIChatBox"
-import { doc, getDoc, updateDoc } from "firebase/firestore"
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, setDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { useFirebase } from "@/contexts/FirebaseContext"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -19,6 +19,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { CourseModule, ModuleTopic, QuizQuestion } from "@/app/types/course"
+import { Textarea } from "@/components/ui/textarea"
+import { CardFooter } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
 
 // Add the FirebaseCourseData interface that's used in this file
 interface FirebaseCourseData {
@@ -137,9 +140,14 @@ export default function ModulePage() {
   const [authChecked, setAuthChecked] = useState(false)
 
   // For quiz functionality
-  const [quizAnswers, setQuizAnswers] = useState<number[]>([])
+  const [isQuizLoading, setIsQuizLoading] = useState(false)
+  const [quizStarted, setQuizStarted] = useState(false)
   const [quizSubmitted, setQuizSubmitted] = useState(false)
-  const [quizScore, setQuizScore] = useState(0)
+  const [quizQuestions, setQuizQuestions] = useState<any[]>([])
+  const [quizAnswers, setQuizAnswers] = useState<Record<string, string>>({})
+  const [quizId, setQuizId] = useState("")
+  const [quizScore, setQuizScore] = useState<number | null>(null)
+  const [quizFeedback, setQuizFeedback] = useState("")
 
   // Create topics array from module content if needed
   const [topics, setTopics] = useState<ModuleTopic[]>([])
@@ -357,61 +365,268 @@ export default function ModulePage() {
     }
   }
 
-  const handleQuizAnswer = (questionIndex: number, answerIndex: number) => {
-    if (quizSubmitted) return; // Don't allow changing answers after submission
+  const handleStartQuiz = async () => {
+    if (!user || !module || !topics) return;
     
-    const newAnswers = [...quizAnswers];
-    newAnswers[questionIndex] = answerIndex;
-    setQuizAnswers(newAnswers);
-  }
-
-  const handleQuizSubmit = async () => {
-    if (!module || !module.quiz || module.quiz.length === 0) return;
+    setIsQuizLoading(true);
     
-    // Calculate score
-    const correctAnswers = module.quiz.filter((q: QuizQuestion, i: number) => 
-      q.correctAnswer === quizAnswers[i]).length;
-    const score = Math.round((correctAnswers / module.quiz.length) * 100);
-    
-    setQuizScore(score);
-    setQuizSubmitted(true);
-    
-    // Update module progress in Firebase
     try {
-      if (user) {
-        // Get current course data
-        const courseDoc = await getDoc(doc(db, "courses", courseId));
-        if (courseDoc.exists()) {
-          const courseData = courseDoc.data() as FirebaseCourseData;
-          
-          // Update the module's progress
-          const updatedModules = [...courseData.modules];
-          const moduleIndex = parseInt(moduleId) - 1;
-          
-          updatedModules[moduleIndex] = {
-            ...updatedModules[moduleIndex],
-            progress: 100 // Mark as complete after taking quiz
-          };
-          
-          // Calculate overall course progress
-          const totalModules = updatedModules.length;
-          const completedModules = updatedModules.filter(m => m.progress === 100).length;
-          const overallProgress = Math.round((completedModules / totalModules) * 100);
-          
-          // Update the course document
-          await updateDoc(doc(db, "courses", courseId), {
-            modules: updatedModules,
-            progress: overallProgress
-          });
-          
-          toast.success("Module completed! Progress saved.");
+      // Prepare content for quiz generation
+      const topicContent = topics.map(topic => ({
+        title: topic.title,
+        content: topic.content || ""
+      }));
+      
+      // Call backend to generate quiz questions
+      const response = await fetch('http://localhost:8000/api/generate-module-quiz', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          moduleId,
+          courseId,
+          topicContent
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to generate quiz questions");
+      }
+      
+      const data = await response.json();
+      setQuizQuestions(data.questions);
+      setQuizId(data.quizId);
+      setQuizStarted(true);
+      
+    } catch (error) {
+      console.error("Error generating quiz:", error);
+      toast.error("Failed to generate quiz questions");
+    } finally {
+      setIsQuizLoading(false);
+    }
+  };
+
+  const handleQuizAnswerChange = (questionId: string, answer: string) => {
+    setQuizAnswers(prev => ({
+      ...prev,
+      [questionId]: answer
+    }));
+  };
+
+  const handleSubmitQuiz = async () => {
+    if (!user || !quizId) return;
+    
+    setIsQuizLoading(true);
+    
+    try {
+      // Call backend to evaluate quiz
+      const response = await fetch('http://localhost:8000/api/evaluate-module-quiz', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          quizId,
+          answers: quizAnswers
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error("Failed to evaluate quiz");
+      }
+      
+      const data = await response.json();
+      setQuizScore(data.score);
+      setQuizFeedback(data.feedback);
+      setQuizSubmitted(true);
+      
+      // If the quiz score is passing (>=70%), update module progress
+      if (data.score >= 70) {
+        // Save the quiz results to Firebase
+        const quizResultRef = doc(db, "quizResults", quizId);
+        await setDoc(quizResultRef, {
+          userId: user.uid,
+          courseId,
+          moduleId,
+          score: data.score,
+          feedback: data.feedback,
+          completionStatus: data.completionStatus,
+          answers: quizAnswers,
+          questions: quizQuestions, // Save the questions along with answers
+          completedAt: new Date().toISOString()
+        });
+        
+        // Update course progress to indicate this module has been completed via quiz
+        await updateModuleProgress(100);
+        
+        toast.success("Quiz completed successfully!");
+      } else {
+        // Still save quiz results even if score is below passing
+        const quizResultRef = doc(db, "quizResults", quizId);
+        await setDoc(quizResultRef, {
+          userId: user.uid,
+          courseId,
+          moduleId,
+          score: data.score,
+          feedback: data.feedback,
+          completionStatus: "needs_review",
+          answers: quizAnswers,
+          questions: quizQuestions, // Save questions for all quiz attempts
+          completedAt: new Date().toISOString()
+        });
+        
+        toast.info("Quiz submitted. Further review recommended.");
+      }
+      
+    } catch (error) {
+      console.error("Error evaluating quiz:", error);
+      toast.error("Failed to evaluate quiz");
+    } finally {
+      setIsQuizLoading(false);
+    }
+  };
+
+  const handleMarkModuleComplete = async () => {
+    if (!user) return;
+    
+    try {
+      // Update module progress to 100%
+      await updateModuleProgress(100);
+      
+      // Get the next module ID
+      const currentModuleId = parseInt(moduleId);
+      const nextModuleId = currentModuleId + 1;
+      
+      // Check if there's another module in the course
+      const courseRef = doc(db, "courses", courseId);
+      const courseDoc = await getDoc(courseRef);
+      
+      if (courseDoc.exists()) {
+        const courseData = courseDoc.data();
+        const totalModules = courseData.modules.length;
+        
+        // If there are more modules, navigate to the next one
+        if (nextModuleId <= totalModules) {
+          router.push(`/course/${courseId}/module/${nextModuleId}`);
+          toast.success("Module completed! Moving to the next module.");
+        } else {
+          // If this was the last module, go back to course page
+          router.push(`/course/${courseId}`);
+          toast.success("Congratulations! You've completed the final module.");
         }
       }
     } catch (error) {
-      console.error("Error updating progress:", error);
-      toast.error("Failed to save progress");
+      console.error("Error marking module as complete:", error);
+      toast.error("Failed to update progress");
     }
-  }
+  };
+
+  // Add this helper function to update module progress
+  const updateModuleProgress = async (progress: number) => {
+    try {
+      const courseRef = doc(db, "courses", courseId);
+      const courseDoc = await getDoc(courseRef);
+      
+      if (courseDoc.exists()) {
+        const courseData = courseDoc.data();
+        const modules = courseData.modules || [];
+        
+        // Find the module being updated
+        const moduleIndex = modules.findIndex((m: any) => 
+          m.id.toString() === moduleId.toString()
+        );
+        
+        if (moduleIndex !== -1) {
+          // Update module progress
+          modules[moduleIndex].progress = progress;
+          
+          // Calculate overall course progress (average of all module progress)
+          const totalProgress = modules.reduce(
+            (sum: number, mod: any) => sum + (mod.progress || 0), 
+            0
+          );
+          const courseProgress = Math.round(totalProgress / modules.length);
+          
+          // Update Firebase with new progress data
+          await updateDoc(courseRef, {
+            modules: modules,
+            progress: courseProgress,
+            updatedAt: new Date().toISOString()
+          });
+          
+          // Update local state
+          setProgress(progress);
+        }
+      }
+    } catch (error) {
+      console.error("Error updating module progress:", error);
+      throw error;
+    }
+  };
+
+  // Update the checkExistingQuiz function to better handle loading completed quizzes
+  const checkExistingQuiz = async () => {
+    if (!user) return;
+    
+    try {
+      // Query all quiz results for this module, not just completed ones
+      const quizQuery = query(
+        collection(db, "quizResults"),
+        where("userId", "==", user.uid),
+        where("courseId", "==", courseId),
+        where("moduleId", "==", moduleId)
+      );
+      
+      const quizSnapshot = await getDocs(quizQuery);
+      
+      if (!quizSnapshot.empty) {
+        // Use the most recent quiz result (in case there are multiple attempts)
+        const sortedDocs = quizSnapshot.docs.sort((a, b) => {
+          const dateA = new Date(a.data().completedAt || 0);
+          const dateB = new Date(b.data().completedAt || 0);
+          return dateB.getTime() - dateA.getTime(); // Sort in descending order (newest first)
+        });
+        
+        const quizData = sortedDocs[0].data();
+        setQuizId(sortedDocs[0].id); // Store the quiz ID for potential updates
+        setQuizSubmitted(true);
+        setQuizScore(quizData.score);
+        setQuizFeedback(quizData.feedback || "");
+        setQuizAnswers(quizData.answers || {});
+        
+        // Set quiz questions from saved data
+        if (quizData.questions && Array.isArray(quizData.questions)) {
+          setQuizQuestions(quizData.questions);
+        } else {
+          // Create placeholder questions based on answers if no questions saved
+          const placeholderQuestions = Object.keys(quizData.answers || {}).map((qId, index) => ({
+            id: qId,
+            question: `Question ${index + 1}`
+          }));
+          setQuizQuestions(placeholderQuestions);
+        }
+        
+        // If a completed quiz exists, automatically set the active tab to quiz
+        if (quizData.completionStatus === "completed" || quizData.score >= 70) {
+          // Set a small delay to ensure component is mounted
+          setTimeout(() => {
+            setActiveTab("quiz");
+          }, 100);
+        }
+      }
+    } catch (error) {
+      console.error("Error checking existing quiz:", error);
+    }
+  };
+
+  // Move this call to useEffect to ensure it runs only once
+  useEffect(() => {
+    if (user && courseId && moduleId) {
+      checkExistingQuiz();
+    }
+  }, [user, courseId, moduleId]);
 
   if (isLoading) {
     return (
@@ -675,82 +890,156 @@ export default function ModulePage() {
                     transition={{ duration: 0.3 }}
                     className="space-y-6"
                   >
-                    <h3 className="text-2xl font-semibold mb-4">Module Quiz</h3>
-                    {module.quiz && module.quiz.length > 0 ? (
+                    {!isQuizLoading && !quizStarted && !quizSubmitted && (
+                      <div className="text-center space-y-4 py-6">
+                        <h3 className="text-2xl font-semibold">Module Quiz</h3>
+                        <p className="text-muted-foreground max-w-lg mx-auto">
+                          Test your understanding of this module by answering a few essay-style questions.
+                          This will help reinforce your learning and identify areas for further study.
+                        </p>
+                        <Button 
+                          id="start-quiz-button"
+                          onClick={handleStartQuiz} 
+                          size="lg"
+                          className="mt-4 px-8 py-6 text-lg animate-pulse hover:animate-none"
+                        >
+                          <PenTool className="mr-2 h-5 w-5" />
+                          Start Quiz
+                        </Button>
+                      </div>
+                    )}
+
+                    {isQuizLoading && (
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <Loader2 className="h-8 w-8 animate-spin mb-4" />
+                        <p className="text-muted-foreground">Generating quiz questions...</p>
+                      </div>
+                    )}
+
+                    {quizStarted && !quizSubmitted && quizQuestions.length > 0 && (
                       <>
-                        {module.quiz.map((question: QuizQuestion, qIndex: number) => (
-                      <Card key={qIndex} className="p-4">
-                            <CardContent>
-                              <h4 className="font-semibold mb-4">{question.question}</h4>
-                              <RadioGroup 
-                                value={quizAnswers[qIndex]?.toString()} 
-                                onValueChange={(value) => handleQuizAnswer(qIndex, parseInt(value))}
-                                className="space-y-2"
-                                disabled={quizSubmitted}
-                              >
-                                {question.options.map((option: string, oIndex: number) => (
-                                  <div key={oIndex} className="flex items-center space-x-2">
-                                    <RadioGroupItem 
-                                      value={oIndex.toString()} 
-                                      id={`q${qIndex}a${oIndex}`} 
-                                      disabled={quizSubmitted}
-                                    />
-                                    <Label htmlFor={`q${qIndex}a${oIndex}`} className="text-sm">
-                                {option}
-                                    </Label>
-                              {quizSubmitted && oIndex === question.correctAnswer && (
-                                      <CheckCircle className="h-4 w-4 text-green-500 ml-auto" />
-                              )}
-                            </div>
-                          ))}
-                              </RadioGroup>
-                              
-                              {quizSubmitted && quizAnswers[qIndex] !== question.correctAnswer && (
-                                <div className="mt-2 text-sm text-red-500">
-                                  Correct answer: {question.options[question.correctAnswer]}
-                        </div>
-                              )}
-                            </CardContent>
-                      </Card>
-                    ))}
+                        <h3 className="text-2xl font-semibold mb-6">Module Quiz: Answer the following questions</h3>
                         
-                    {!quizSubmitted ? (
-                          <Button 
-                            onClick={handleQuizSubmit} 
-                            disabled={quizAnswers.includes(-1)} 
-                            className="w-full"
-                          >
-                        Submit Quiz
-                      </Button>
-                    ) : (
-                      <Card className="p-4 bg-primary text-primary-foreground">
+                        {quizQuestions.map((question, qIndex) => (
+                          <Card key={qIndex} className="mb-6">
+                            <CardHeader>
+                              <CardTitle className="text-lg font-medium">{qIndex + 1}. {question.question}</CardTitle>
+                            </CardHeader>
                             <CardContent>
-                        <div className="flex items-center justify-between">
-                          <span className="text-lg font-semibold">Quiz Result</span>
-                                <span className="text-2xl font-bold">{quizScore}%</span>
-                              </div>
-                              <Progress value={quizScore} className="mt-2" />
-                              
-                              <div className="mt-4">
-                                {quizScore >= 70 ? (
-                                  <p>Great job! You've passed this module quiz.</p>
-                                ) : (
-                                  <p>Keep learning! You might want to review the module content again.</p>
-                                )}
-                              </div>
+                              <Textarea
+                                placeholder="Write your answer here..."
+                                className="min-h-[120px]"
+                                value={quizAnswers[question.id.toString()] || ""}
+                                onChange={(e) => handleQuizAnswerChange(question.id.toString(), e.target.value)}
+                              />
                             </CardContent>
-                            
-                            <div className="px-4 pb-4">
-                              <Button onClick={() => setActiveTab("content")} className="w-full">
-                                Return to Content
-                              </Button>
+                          </Card>
+                        ))}
+                        
+                        <div className="flex justify-between">
+                          <Button 
+                            variant="outline" 
+                            onClick={() => setQuizStarted(false)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button 
+                            onClick={handleSubmitQuiz} 
+                            disabled={Object.keys(quizAnswers).length < quizQuestions.length}
+                            className="gap-2"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            Submit Quiz
+                          </Button>
                         </div>
-                      </Card>
-                        )}
                       </>
-                    ) : (
-                      <div className="text-center p-6 bg-muted rounded-md">
-                        <p>No quiz available for this module.</p>
+                    )}
+
+                    {quizSubmitted && quizScore !== null && (
+                      <div className="space-y-6">
+                        <Card className="bg-primary/5 border-primary/20">
+                          <CardHeader className="border-b pb-3">
+                            <div className="flex justify-between items-center">
+                              <CardTitle>Quiz Results</CardTitle>
+                              <div className="flex items-center gap-3">
+                                <Badge variant={quizScore >= 70 ? "success" : "warning"}>
+                                  {quizScore >= 70 ? "Passed" : "Needs Review"}
+                                </Badge>
+                                <div className="text-2xl font-bold">{Math.round(quizScore)}%</div>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="pt-4 space-y-4">
+                            <div>
+                              <Progress value={quizScore} className="h-2">
+                                <div 
+                                  className={`h-full ${quizScore >= 70 ? "bg-green-500" : "bg-yellow-500"}`} 
+                                  style={{ width: `${quizScore}%` }} 
+                                />
+                              </Progress>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <h4 className="font-medium">Feedback:</h4>
+                              <p className="text-muted-foreground">{quizFeedback}</p>
+                            </div>
+                            
+                            {quizScore >= 70 ? (
+                              <Alert className="bg-success/10 border-success text-success">
+                                <CheckCircle2 className="h-4 w-4" />
+                                <AlertTitle>Success!</AlertTitle>
+                                <AlertDescription>
+                                  Congratulations! You've successfully completed this module quiz.
+                                </AlertDescription>
+                              </Alert>
+                            ) : (
+                              <Alert className="bg-warning/10 border-warning">
+                                <AlertTriangle className="h-4 w-4" />
+                                <AlertTitle>Review Recommended</AlertTitle>
+                                <AlertDescription>
+                                  You might want to review the module content again to strengthen your understanding.
+                                </AlertDescription>
+                              </Alert>
+                            )}
+                          </CardContent>
+                          <CardFooter className="border-t pt-4">
+                            <Button 
+                              className="w-full"
+                              onClick={() => {
+                                // Mark module as completed when quiz is passed
+                                if (quizScore >= 70) {
+                                  handleMarkModuleComplete();
+                                } else {
+                                  setActiveTab("content");
+                                }
+                              }}
+                            >
+                              {quizScore >= 70 ? "Continue to Next Module" : "Review Module Content"}
+                            </Button>
+                          </CardFooter>
+                        </Card>
+                        
+                        <Card>
+                          <CardHeader className="border-b">
+                            <CardTitle>Your Quiz Responses</CardTitle>
+                            <CardDescription>
+                              Completed on {new Date().toLocaleDateString()}
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent className="space-y-6 pt-4">
+                            {quizQuestions.map((question, qIndex) => (
+                              <div key={qIndex} className="space-y-2 border-b pb-4 last:border-b-0 last:pb-0">
+                                <h4 className="font-medium text-lg">{qIndex + 1}. {question.question}</h4>
+                                <div>
+                                  <p className="text-sm text-muted-foreground mb-2">Your answer:</p>
+                                  <div className="bg-muted p-3 rounded-md">
+                                    <p className="whitespace-pre-wrap">{quizAnswers[question.id.toString()] || "No answer provided"}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
                       </div>
                     )}
                   </motion.div>
@@ -770,25 +1059,66 @@ export default function ModulePage() {
               <CardTitle>Module Progress</CardTitle>
             </CardHeader>
             <CardContent>
-              <Progress value={progress} className="mb-2" />
+              <Progress value={progress} className="mb-2">
+                <div 
+                  className={`h-full ${quizSubmitted && quizScore && quizScore >= 70 ? "bg-green-500" : ""}`} 
+                  style={{ width: `${progress}%` }} 
+                />
+              </Progress>
               <p className="text-sm text-muted-foreground">
                 {topics.length > 0 ? 
                   `${currentTopicIndex + 1} of ${topics.length} topics completed` : 
                   `Module ${moduleId} of 5`}
               </p>
               
-              {module.quiz && module.quiz.length > 0 && (
+              {quizSubmitted && quizScore !== null ? (
+                // Show quiz result button if quiz is completed
                 <div className="mt-4">
                   <Button 
-                    variant="outline" 
+                    variant={quizScore >= 70 ? "default" : "outline"} 
                     onClick={() => setActiveTab("quiz")} 
-                    className="w-full"
-                    disabled={quizSubmitted}
+                    className={`w-full ${quizScore >= 70 ? "bg-green-500 hover:bg-green-600 text-white" : ""}`}
                   >
-                    <PenTool className="mr-2 h-4 w-4" />
-                    {quizSubmitted ? "Quiz Completed" : "Take Module Quiz"}
+                    {quizScore >= 70 ? 
+                      <><CheckCircle2 className="mr-2 h-4 w-4" /> Quiz Passed ({Math.round(quizScore)}%)</> : 
+                      <><AlertTriangle className="mr-2 h-4 w-4" /> Quiz Needs Review ({Math.round(quizScore)}%)</>
+                    }
                   </Button>
                 </div>
+              ) : (
+                // Show quiz options if not yet completed
+                <>
+                  {progress >= 80 && !quizSubmitted && (
+                    <div className="mt-4">
+                      <Button 
+                        variant="default" 
+                        onClick={() => {
+                          setActiveTab("quiz");
+                          setTimeout(() => {
+                            document.getElementById("start-quiz-button")?.scrollIntoView({ behavior: "smooth" });
+                          }, 100);
+                        }}
+                        className="w-full bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary shadow-md"
+                      >
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        Ready to Test Your Knowledge?
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {!quizSubmitted && (
+                    <div className="mt-4">
+                      <Button 
+                        variant="outline" 
+                        onClick={() => setActiveTab("quiz")} 
+                        className="w-full"
+                      >
+                        <PenTool className="mr-2 h-4 w-4" />
+                        Take Module Quiz
+                      </Button>
+                    </div>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

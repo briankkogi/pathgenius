@@ -103,6 +103,26 @@ processing_requests = set()
 # Synchronization lock to prevent multiple identical requests
 curation_locks = {}
 
+# Add these new models after your existing ones
+class ModuleQuizRequest(BaseModel):
+    moduleId: str
+    userId: str
+    courseId: str
+    topicContent: List[Dict[str, str]]
+
+class ModuleQuizResponse(BaseModel):
+    questions: List[AssessmentQuestion]
+    quizId: str
+
+class ModuleQuizSubmission(BaseModel):
+    quizId: str
+    answers: Dict[str, str]
+
+class ModuleQuizResult(BaseModel):
+    score: float
+    feedback: str
+    completionStatus: str
+
 @app.post("/api/generate-assessment", response_model=AssessmentResponse)
 async def generate_assessment(request: AssessmentRequest):
     """Generate a text-based assessment based on learning goal and profession level"""
@@ -917,6 +937,252 @@ async def get_course(course_id: str):
         raise HTTPException(status_code=404, detail="Course not found")
     
     return curated_courses[course_id]
+
+# Add these new endpoints
+@app.post("/api/generate-module-quiz", response_model=ModuleQuizResponse)
+async def generate_module_quiz(request: ModuleQuizRequest):
+    """Generate a quiz based on module content"""
+    try:
+        user_id = request.userId
+        module_id = request.moduleId
+        
+        # Create a request key for locking
+        request_key = f"quiz_{user_id}_{module_id}"
+        
+        # Create a lock for this specific request if it doesn't exist
+        if request_key not in request_locks:
+            request_locks[request_key] = asyncio.Lock()
+            
+        # Use the lock to ensure only one request processes at a time
+        async with request_locks[request_key]:
+            # Check if this request is already being processed
+            if request_key in processing_requests:
+                logger.info(f"Quiz request {request_key} is already being processed.")
+                # Wait for completion - similar to assessment logic
+                for _ in range(5):  # Try checking 5 times with a delay
+                    await asyncio.sleep(1)
+                    # Could check for an existing quiz here, similar to assessments
+            
+            # Mark this request as processing
+            processing_requests.add(request_key)
+            logger.info(f"Starting to process module quiz request: {request_key}")
+            
+            try:
+                # Extract all content from topics to use for question generation
+                module_content = ""
+                for topic in request.topicContent:
+                    module_content += topic.get("content", "") + "\n\n"
+                
+                # Create a prompt for generating questions based on module content
+                prompt = f"""
+                You are an educational assessment expert. Your task is to create 5 thoughtful, open-ended questions to evaluate a student's understanding of the module content below.
+
+                The questions should:
+                1. Test comprehension of the key concepts presented in the module
+                2. Require critical thinking and application of knowledge
+                3. Cover different aspects of the material
+                4. Be clearly worded and unambiguous
+                5. Be answerable based solely on the module content (don't require external knowledge)
+
+                Here is the module content to create questions about:
+                
+                {module_content[:6000]}  # Limit content to prevent token overload
+                
+                Format your response ONLY as a JSON array with exactly 5 questions like this:
+                [
+                    {{
+                        "id": 1,
+                        "question": "First question text here?"
+                    }},
+                    {{
+                        "id": 2, 
+                        "question": "Second question text here?"
+                    }},
+                    ...and so on
+                ]
+
+                IMPORTANT: Use double quotes for all JSON properties and string values. Do NOT include any explanations or comments outside the JSON array.
+                """
+                
+                logger.info(f"Generating quiz questions for module {module_id}")
+                
+                # Make the request to the AI model
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    response = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": "gemma3:4b",  # Use a potentially better model for quiz generation
+                            "prompt": prompt,
+                            "stream": False,
+                            "temperature": 0.7,
+                            "max_tokens": 2000
+                        }
+                    )
+                    
+                    if response.status_code != 200:
+                        logger.error(f"AI Error: {response.status_code}")
+                        raise HTTPException(status_code=500, detail=f"Failed to generate quiz: {response.status_code}")
+                    
+                    # Process the model response, similar to assessment processing
+                    questions_data = await process_model_response(response, request)
+                    
+                    # Create a unique quiz ID
+                    quiz_id = f"quiz_{request.userId}_{request.moduleId}_{int(time.time())}"
+                    
+                    # Store in memory for later evaluation (similar to assessment sessions)
+                    assessment_sessions[quiz_id] = {
+                        "userId": request.userId,
+                        "moduleId": request.moduleId,
+                        "courseId": request.courseId,
+                        "questions": questions_data,
+                        "createdAt": time.time()
+                    }
+                    
+                    return {
+                        "questions": questions_data,
+                        "quizId": quiz_id
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Error generating module quiz: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error generating quiz: {str(e)}")
+            finally:
+                # Remove from processing set when done
+                if request_key in processing_requests:
+                    processing_requests.remove(request_key)
+    
+    except Exception as e:
+        logger.error(f"Outer exception in generate_module_quiz: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process quiz request: {str(e)}")
+
+@app.post("/api/evaluate-module-quiz", response_model=ModuleQuizResult)
+async def evaluate_module_quiz(submission: ModuleQuizSubmission):
+    """Evaluate a module quiz submission using AI assistance"""
+    if submission.quizId not in assessment_sessions:
+        raise HTTPException(status_code=404, detail="Quiz session not found")
+    
+    session = assessment_sessions[submission.quizId]
+    
+    # Basic completion calculation
+    questions = session["questions"]
+    total = len(questions)
+    answered = sum(1 for q_id in [str(q["id"]) for q in questions] if q_id in submission.answers and submission.answers[q_id].strip())
+    
+    # Calculate a completion score
+    completion_score = (answered / total) * 100 if total > 0 else 0
+    
+    # Store the answers in the session
+    session["answers"] = submission.answers
+    
+    logger.info(f"Evaluating module quiz for module {session['moduleId']}")
+    
+    # Initialize variables for AI evaluation
+    knowledge_score = completion_score  # Default to completion score
+    detailed_feedback = ""
+    
+    if answered > 0:
+        try:
+            # Create a prompt for evaluation
+            eval_prompt = f"""
+            You are an educational assessment expert evaluating a student's understanding of module content.
+            
+            You will analyze the student's answers to quiz questions and provide a concise evaluation.
+            
+            Here are the student's answers:
+            """
+            
+            # Add only the answered questions to the prompt
+            for q in questions:
+                q_id = str(q["id"])
+                if q_id in submission.answers and submission.answers[q_id].strip():
+                    question = q["question"]
+                    answer = submission.answers[q_id]
+                    eval_prompt += f"\nQuestion: {question}\nAnswer: {answer}\n"
+            
+            # Instructions for structured output
+            eval_prompt += """
+            Based on your analysis, provide a JSON object with this structure:
+            {
+              "score": a number between 0 and 100 representing the student's understanding,
+              "feedback": "Constructive feedback on their answers, including what they understood well and where they could improve."
+            }
+
+            Return ONLY the JSON object with no additional text.
+            Use double quotes for strings. Be concise but helpful in the feedback.
+            """
+            
+            logger.info("Sending quiz evaluation request to AI")
+            
+            # Make the request to the AI model
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                ai_response = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": "gemma3:4b",
+                        "prompt": eval_prompt,
+                        "stream": False,
+                        "temperature": 0.1,
+                        "max_tokens": 1000
+                    }
+                )
+                
+                if ai_response.status_code != 200:
+                    logger.error(f"AI Evaluation Error: {ai_response.status_code}")
+                    raise HTTPException(status_code=500, detail="Failed to evaluate quiz")
+                
+                result = ai_response.json()
+                content = result.get("response", "")
+                
+                # Extract JSON from the response
+                try:
+                    # Find a JSON object with braces
+                    json_pattern = r'({[\s\S]*})'
+                    json_match = re.search(json_pattern, content, re.DOTALL)
+                    
+                    if json_match:
+                        json_str = json_match.group(1)
+                        # Clean up the JSON string
+                        json_str = json_str.replace("'", '"')
+                        json_str = re.sub(r',\s*}', '}', json_str)
+                        
+                        # Parse JSON
+                        ai_data = json.loads(json_str)
+                        
+                        # Extract the fields
+                        if "score" in ai_data:
+                            knowledge_score = float(ai_data.get("score", completion_score))
+                            knowledge_score = max(0, min(100, knowledge_score))
+                            
+                        if "feedback" in ai_data:
+                            detailed_feedback = ai_data.get("feedback", "").strip()
+                    else:
+                        logger.warning("Could not extract JSON from AI response")
+                except Exception as e:
+                    logger.error(f"Error processing AI evaluation: {str(e)}")
+        
+        except Exception as e:
+            logger.error(f"Module quiz evaluation error: {str(e)}")
+            detailed_feedback = "An error occurred during evaluation. Your quiz has been recorded but couldn't be automatically graded."
+    
+    # Determine completion status based on score
+    completion_status = "completed"
+    if knowledge_score < 70:
+        completion_status = "needs_review"
+    
+    # Store the evaluation results in the session
+    session["evaluation"] = {
+        "score": knowledge_score,
+        "feedback": detailed_feedback,
+        "completionStatus": completion_status,
+        "evaluatedAt": time.time()
+    }
+    
+    # Return the evaluation
+    return {
+        "score": knowledge_score,
+        "feedback": detailed_feedback,
+        "completionStatus": completion_status
+    }
 
 if __name__ == "__main__":
     import uvicorn # type: ignore
