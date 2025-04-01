@@ -97,6 +97,12 @@ request_locks = {}
 # In-memory storage for curated courses
 curated_courses = {}
 
+# Track processing requests to prevent duplicate processing
+processing_requests = set()
+
+# Synchronization lock to prevent multiple identical requests
+curation_locks = {}
+
 @app.post("/api/generate-assessment", response_model=AssessmentResponse)
 async def generate_assessment(request: AssessmentRequest):
     """Generate a text-based assessment based on learning goal and profession level"""
@@ -671,192 +677,238 @@ async def health_check():
 @app.post("/api/curate-course", response_model=CourseResponse)
 async def curate_course(request: CurationRequest):
     """Generate a single module course based on the learning goal"""
-    try:
-        user_id = request.userId
-        learning_goal = request.learningGoal
-        
-        # Create a unique key for this curation request to detect duplicates
-        request_key = f"curate_{user_id}_{learning_goal}_{int(time.time()) // 60}"  # Group by minute
-        
-        # Check if this request is already being processed
-        if request_key in processing_requests:
-            logger.info(f"Duplicate curation request detected: {request_key}")
-            # Wait a short time to see if the original request completes
-            for _ in range(5):
-                await asyncio.sleep(1)
-                # Check if there's a recently created course we can return
-                for course_id, course in curated_courses.items():
-                    # If course was created in the last 2 minutes and matches our criteria
-                    if (course.get("userId") == user_id and 
-                        course.get("title", "").startswith(f"{learning_goal}") and
-                        time.time() - course.get("createdTimestamp", 0) < 120):
-                        logger.info(f"Returning existing course: {course_id}")
-                        return course
-            
-            # If we couldn't find a course after waiting, proceed with creating a new one
-        
-        # Mark this request as processing
-        processing_requests.add(request_key)
-        logger.info(f"Starting course curation for user {user_id}, goal: {learning_goal}")
-        
+    user_id = request.userId
+    learning_goal = request.learningGoal
+    # Use a more persistent key for the lock, not time-based
+    request_key = f"curate_{user_id}_{learning_goal}"
+
+    # Get or create a lock for this specific user/goal combination
+    lock = curation_locks.get(request_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        curation_locks[request_key] = lock
+
+    async with lock: # Acquire the lock for this specific request key
         try:
-            # Continue with the existing course creation logic...
-            course_id = f"course_{user_id}_{int(time.time())}"
-            
-            # Validate recommended modules
-            if not request.recommendedModules or len(request.recommendedModules) == 0:
-                logger.warning(f"No recommended modules provided from assessment.")
-                raise HTTPException(status_code=400, detail="No recommended modules provided. Please complete an assessment first.")
-            
-            recommended_modules = request.recommendedModules
-            logger.info(f"Using recommended modules from assessment, found {len(recommended_modules)} modules")
-            
-            # Initialize processed modules list - we'll only use the first module for content generation
-            processed_modules = []
-            
-            # Get the first module only for processing
-            if len(recommended_modules) > 0:
-                first_module_data = recommended_modules[0]
-                module_title = first_module_data.get('title', f"Module 1 on {learning_goal}")
-                topics = []
-                
-                # Process topics from the first module
-                if "topics" in first_module_data and isinstance(first_module_data["topics"], list):
-                    for j, topic in enumerate(first_module_data["topics"][:3]):  # Limit to 3 topics
-                        topic_title = topic if isinstance(topic, str) else topic.get('title', f"Topic {j+1}")
-                        
-                        # Removed type field
-                        topics.append({
-                            "id": f"1-{j+1}",
-                            "title": topic_title,
-                            "content": ""  # Will be populated with AI content
-                        })
-                
-                # Create the first module structure - removed type field
-                first_module = {
-                    "id": 1,
-                    "title": module_title,
-                    "description": f"Learn about {module_title} for {learning_goal}",
-                    "progress": 0,
-                    "topics": topics
-                }
-                
-                # Generate content for each topic in the first module
-                for topic_index, topic in enumerate(first_module["topics"]):
-                    topic_title = topic["title"]
-                    logger.info(f"Generating content for topic: {topic_title}")
-                    
-                    # Create a focused prompt for this topic
-                    topic_prompt = f"""
-                    You are an educational content creator writing a detailed article about "{topic_title}" 
-                    for a course on {learning_goal}.
-                    
-                    Create comprehensive, educational content that a student can learn from directly.
-                    
-                    The content should:
-                    1. Be detailed and informative (at least 500 words)
-                    2. Include examples and practical applications
-                    3. Be well structured with headers and subheaders
-                    4. Be factually accurate and comprehensive
-                    5. Include markdown formatting (headers with #, lists, etc.)
-                    
-                    DO NOT use placeholder text or generic content - this will be shown directly to students.
-                    DO NOT introduce the topic with phrases like "In this article we will discuss..." - 
-                    instead, get straight into teaching the content.
-                    
-                    Write ONLY the article content in markdown format.
-                    """
-                    
-                    # Generate content for this specific topic
-                    async with httpx.AsyncClient(timeout=180.0) as client:
-                        logger.info(f"Making request to AI for topic {topic_title}")
-                        
-                        response = await client.post(
-                            "http://localhost:11434/api/generate",
-                            json={
-                                "model": "gemma3:4b",
-                                "prompt": topic_prompt,
-                                "stream": False,
-                                "temperature": 0.7,
-                                "max_tokens": 4000
-                            }
+            # Check if a course already exists for this user/goal in memory
+            # This check is quick and avoids DB queries if we just created it
+            existing_course_id_memory = None
+            for course_id, course_data in curated_courses.items():
+                 if course_data.get("userId") == user_id and \
+                    course_data.get("title", "").startswith(f"{learning_goal}"):
+                     existing_course_id_memory = course_id
+                     break # Found one
+
+            if existing_course_id_memory:
+                 logger.info(f"Returning existing course from memory: {existing_course_id_memory}")
+                 # Ensure the returned structure matches CourseResponse
+                 return CourseResponse(**curated_courses[existing_course_id_memory])
+
+
+            # If not found in memory, *now* check Firestore
+            # (Assuming you have a way to query Firestore for courses by userId and learningGoal)
+            # existing_course_id_db = await check_existing_course_in_db(user_id, learning_goal) # Placeholder
+            # if existing_course_id_db:
+            #     logger.info(f"Found existing course in DB: {existing_course_id_db}, returning it.")
+            #     # Fetch the course data from DB and return
+            #     # course_data_db = await fetch_course_from_db(existing_course_id_db) # Placeholder
+            #     # return CourseResponse(**course_data_db)
+            #     # Note: Implementing DB checks requires Firestore query logic here
+
+
+            # If we reach here, no existing course was found, proceed with generation
+            logger.info(f"No existing course found. Starting course curation for user {user_id}, goal: {learning_goal}")
+
+            # Check if this specific request instance is already marked as processing
+            # (This handles the case where the same instance retries quickly)
+            if request_key in processing_requests:
+                 logger.warning(f"Request key {request_key} marked as processing but lock acquired. Possible race condition or stale state.")
+                 # You might choose to raise an error or wait again here, but the lock should prevent actual double processing.
+
+            processing_requests.add(request_key) # Mark as processing *after* lock acquisition
+
+            try:
+                # --- Course Generation Logic ---
+                course_id = f"course_{user_id}_{int(time.time())}" # Unique ID based on current time
+
+                # Validate recommended modules (same as before)
+                if not request.recommendedModules or len(request.recommendedModules) == 0:
+                    logger.warning(f"No recommended modules provided from assessment.")
+                    # Return a different status or structure if modules are required
+                    # For now, proceeding without them might be okay if assessment isn't mandatory
+                    # raise HTTPException(status_code=400, detail="No recommended modules provided. Please complete an assessment first.")
+                    recommended_modules = [] # Allow proceeding without modules for now
+                else:
+                    recommended_modules = request.recommendedModules
+                logger.info(f"Using recommended modules: {len(recommended_modules)} found")
+
+                processed_modules: List[CourseModule] = [] # Ensure type
+
+                # --- Module & Topic Processing Logic (largely the same) ---
+                # (Keep the improved topic_prompt from step 1)
+                # ... (loop through recommended_modules or create default if none)
+                # ... (AI call for topic content)
+                # ... (structure modules and topics into `processed_modules`)
+                # Example structure if no recommended modules:
+                if not recommended_modules:
+                     logger.info("No recommended modules, creating default structure.")
+                     # Create a default first module based on learning goal
+                     default_topic_title = f"Introduction to {learning_goal}"
+                     default_topic_content = await generate_default_topic_content(learning_goal, default_topic_title) # Need a helper for this
+
+                     processed_modules = [
+                         CourseModule(
+                             id=1,
+                             title=f"Getting Started with {learning_goal}",
+                             description=f"An introduction to the core concepts of {learning_goal}.",
+                             topics=[
+                                 { "id": "1-1", "title": default_topic_title, "content": default_topic_content }
+                                 # Add more default topics if needed
+                             ]
+                         )
+                     ]
+
+                else:
+                     # --- Existing Logic to process recommended_modules ---
+                     if len(recommended_modules) > 0:
+                        first_module_data = recommended_modules[0]
+                        module_title = first_module_data.get('title', f"Module 1 on {learning_goal}")
+                        topics = []
+
+                        if "topics" in first_module_data and isinstance(first_module_data["topics"], list):
+                            for j, topic_data in enumerate(first_module_data["topics"][:3]):
+                                topic_title = topic_data if isinstance(topic_data, str) else topic_data.get('title', f"Topic {j+1}")
+                                # Generate content for this topic (using improved prompt)
+                                topic_content = await generate_topic_content(learning_goal, topic_title) # Refactored AI call
+                                topics.append({
+                                    "id": f"1-{j+1}",
+                                    "title": topic_title,
+                                    "content": topic_content
+                                })
+
+                        first_module = CourseModule(
+                            id=1,
+                            title=module_title,
+                            description=f"Learn about {module_title} for {learning_goal}",
+                            topics=topics
                         )
-                        
-                        if response.status_code != 200:
-                            logger.error(f"AI error for topic {topic_title}: {response.status_code}")
-                            topic["content"] = ""
-                            continue
-                        
-                        result = response.json()
-                        topic_content = result.get("response", "")
-                        
-                        # Clean up any potential code blocks or extra content
-                        if "```" in topic_content:
-                            match = re.search(r'```(?:markdown)?\s*([\s\S]*?)\s*```', topic_content, re.DOTALL)
-                            if match:
-                                topic_content = match.group(1)
-                        
-                        # Ensure content has a title
-                        if not topic_content.strip().startswith("#"):
-                            topic_content = f"# {topic_title}\n\n{topic_content}"
-                        
-                        # Log the generated content
-                        logger.info(f"Generated {len(topic_content)} characters for topic {topic_title}")
-                        logger.info(f"Content preview: {topic_content[:100]}...")
-                        
-                        # Update the topic with the generated content
-                        topic["content"] = topic_content
-                
-                # Add the processed first module
-                processed_modules.append(first_module)
-                
-                # Add remaining modules without processing their content
-                for i, module in enumerate(recommended_modules[1:5], start=1):
-                    module_title = module.get('title', f"Module {i+1} on {learning_goal}")
-                    empty_topics = []
-                    
-                    # Create empty topic structures for other modules - removed type field
-                    if "topics" in module and isinstance(module["topics"], list):
-                        for j, topic in enumerate(module["topics"][:3]):
-                            topic_title = topic if isinstance(topic, str) else topic.get('title', f"Topic {j+1}")
-                            empty_topics.append({
-                                "id": f"{i+1}-{j+1}",
-                                "title": topic_title,
-                                "content": ""
-                            })
-                    
-                    # Added to processed modules - removed type field
-                    processed_modules.append({
-                        "id": i+1,
-                        "title": module_title,
-                        "description": f"Learn about {module_title} for {learning_goal}",
-                        "progress": 0,
-                        "topics": empty_topics
-                    })
-            
-            # Store the course in our in-memory storage with timestamp
-            created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            curated_courses[course_id] = {
-                "courseId": course_id,
-                "userId": user_id,
-                "title": f"{learning_goal} Course",
-                "modules": processed_modules,
-                "createdAt": created_at,
-                "createdTimestamp": time.time(),  # Add timestamp for comparisons
-                "isComplete": False,
-                "firstModuleComplete": True
-            }
-            
-            return curated_courses[course_id]
-            
-        finally:
-            # Clean up after processing
+                        processed_modules.append(first_module)
+
+                        # Add remaining recommended modules (without content for now)
+                        for i, module_data in enumerate(recommended_modules[1:5], start=1):
+                             module_title = module_data.get('title', f"Module {i+1} on {learning_goal}")
+                             empty_topics = []
+                             if "topics" in module_data and isinstance(module_data["topics"], list):
+                                 for j, topic_data in enumerate(module_data["topics"][:3]):
+                                     topic_title = topic_data if isinstance(topic_data, str) else topic_data.get('title', f"Topic {j+1}")
+                                     empty_topics.append({ "id": f"{i+1}-{j+1}", "title": topic_title, "content": "" })
+
+                             processed_modules.append(CourseModule(
+                                 id=i + 1,
+                                 title=module_title,
+                                 description=f"Learn about {module_title} for {learning_goal}",
+                                 topics=empty_topics
+                             ))
+                     # --- End of processing recommended_modules ---
+
+
+                # --- Course Saving and Response ---
+                created_at_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                created_timestamp = time.time()
+
+                # Prepare final course data matching CourseResponse structure
+                final_course_data = {
+                    "courseId": course_id,
+                    "userId": user_id, # Add userId for potential future filtering
+                    "title": f"{learning_goal} Course",
+                    "modules": [mod.dict() for mod in processed_modules], # Convert Pydantic models to dicts
+                    "createdAt": created_at_str,
+                    "createdTimestamp": created_timestamp, # Keep internal timestamp
+                    # Add any other fields expected by CourseResponse/frontend
+                }
+
+                # Store in memory
+                curated_courses[course_id] = final_course_data
+
+                logger.info(f"Successfully curated and stored course: {course_id}")
+
+                # Return using the Pydantic model for validation
+                return CourseResponse(**final_course_data)
+
+            finally:
+                # Clean up processing request marker
+                if request_key in processing_requests:
+                    processing_requests.remove(request_key)
+
+        except Exception as e:
+            logger.error(f"Error during locked course curation for {request_key}: {str(e)}", exc_info=True)
+            # Clean up lock state if error occurs
             if request_key in processing_requests:
                 processing_requests.remove(request_key)
-                
+            raise HTTPException(status_code=500, detail=f"Failed to generate course: {str(e)}")
+
+    # Lock is released automatically when exiting 'async with'
+
+# Helper function Refactors (add these outside the endpoint function)
+async def generate_topic_content(learning_goal: str, topic_title: str) -> str:
+    # (Contains the improved topic_prompt and httpx call logic)
+    topic_prompt = f"""
+    You are an expert educational content creator specializing in {learning_goal}.
+    Your task is to write a detailed and comprehensive article about "{topic_title}".
+    Assume the audience is learning this topic as part of a larger course on {learning_goal}.
+
+    **Content Requirements:**
+    1.  **Depth and Detail:** Provide in-depth explanations (aim for 500-600 words). Go beyond surface-level definitions.
+    2.  **Clarity:** Explain concepts clearly and logically.
+    3.  **Practical Examples:** Include relevant examples, but ensure they are illustrative and well-explained within the context. **AVOID trivial or overly simple code snippets like basic list creation or printing unless they are part of a larger, complex example demonstrating a key concept.** Focus on explaining *why* the example works and what it demonstrates.
+    4.  **Structure:** Use markdown formatting effectively (headers with `#`, ##`, ###`, bullet points `*` or `-`, numbered lists, bold text `**text**`) for readability.
+    5.  **Accuracy:** Ensure all information is factually correct.
+    6.  **Engagement:** Write in an informative and engaging style suitable for learning.
+
+    **Instructions:**
+    -   Write ONLY the article content in markdown format.
+    -   Start directly with the content (e.g., a header like `# {topic_title}`). Do NOT include introductory phrases like "In this article..." or "This topic covers...".
+    -   Do NOT include placeholder text like "[Example Here]".
+    -   Focus on teaching the concepts thoroughly.
+
+    Begin the article now:
+    """
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            logger.info(f"Making request to AI for topic {topic_title}")
+            response = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": "gemma3:4b",
+                    "prompt": topic_prompt,
+                    "stream": False,
+                    "temperature": 0.7,
+                    "max_tokens": 4000
+                }
+            )
+            if response.status_code != 200:
+                logger.error(f"AI error for topic {topic_title}: {response.status_code}")
+                return f"# {topic_title}\n\nContent generation failed. Please try again later."
+
+            result = response.json()
+            topic_content = result.get("response", "")
+
+            # Clean up content (same as before)
+            if "```" in topic_content:
+                 match = re.search(r'```(?:markdown)?\s*([\s\S]*?)\s*```', topic_content, re.DOTALL)
+                 if match: topic_content = match.group(1).strip()
+            if not topic_content.strip().startswith("#"):
+                 topic_content = f"# {topic_title}\n\n{topic_content}"
+
+            logger.info(f"Generated {len(topic_content)} characters for topic {topic_title}")
+            return topic_content.strip()
     except Exception as e:
-        logger.error(f"Error in curate_course: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate course: {str(e)}")
+        logger.error(f"Exception generating content for {topic_title}: {e}")
+        return f"# {topic_title}\n\nError generating content."
+
+async def generate_default_topic_content(learning_goal: str, topic_title: str) -> str:
+     # Similar to generate_topic_content but maybe simpler prompt if needed
+     return await generate_topic_content(learning_goal, topic_title) # Reuse main generator for now
 
 @app.get("/api/course/{course_id}")
 async def get_course(course_id: str):
