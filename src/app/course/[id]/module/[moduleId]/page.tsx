@@ -933,8 +933,8 @@ export default function ModulePage() {
                                 onChange={(e) => handleQuizAnswerChange(question.id.toString(), e.target.value)}
                               />
                             </CardContent>
-                          </Card>
-                        ))}
+                      </Card>
+                    ))}
                         
                         <div className="flex justify-between">
                           <Button 
@@ -949,8 +949,8 @@ export default function ModulePage() {
                             className="gap-2"
                           >
                             <CheckCircle2 className="h-4 w-4" />
-                            Submit Quiz
-                          </Button>
+                        Submit Quiz
+                      </Button>
                         </div>
                       </>
                     )}
@@ -1039,7 +1039,7 @@ export default function ModulePage() {
                               </div>
                             ))}
                           </CardContent>
-                        </Card>
+                      </Card>
                       </div>
                     )}
                   </motion.div>
