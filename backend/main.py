@@ -123,6 +123,13 @@ class ModuleQuizResult(BaseModel):
     feedback: str
     completionStatus: str
 
+class ModuleContentRequest(BaseModel):
+    userId: str
+    courseId: str
+    moduleId: str
+    learningGoal: str = ""
+    moduleTitle: str
+
 @app.post("/api/generate-assessment", response_model=AssessmentResponse)
 async def generate_assessment(request: AssessmentRequest):
     """Generate a text-based assessment based on learning goal and profession level"""
@@ -1183,6 +1190,22 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
         "feedback": detailed_feedback,
         "completionStatus": completion_status
     }
+
+@app.post("/api/generate-module-content")
+async def generate_module_content(request: ModuleContentRequest):
+    """Generate content for a module that has no content"""
+    try:
+        # Access fields directly from the Pydantic model
+        if not all([request.userId, request.courseId, request.moduleId, request.moduleTitle]):
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Generate content for the module
+        content = await generate_topic_content(request.learningGoal, request.moduleTitle)
+        
+        return {"content": content}
+    except Exception as e:
+        logger.error(f"Error generating module content: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating content: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn # type: ignore

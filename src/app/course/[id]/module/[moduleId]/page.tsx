@@ -124,6 +124,35 @@ const coursesData = {
   // Add more courses as needed
 }
 
+// Add this function before the ModulePage component
+async function generateModuleContent(userId: string, courseId: string, moduleId: string, learningGoal: string, moduleTitle: string) {
+  try {
+    const response = await fetch('http://localhost:8000/api/generate-module-content', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        userId,
+        courseId,
+        moduleId,
+        learningGoal,
+        moduleTitle
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to generate module content');
+    }
+    
+    const data = await response.json();
+    return data.content;
+  } catch (error) {
+    console.error('Error generating module content:', error);
+    throw error;
+  }
+}
+
 export default function ModulePage() {
   const params = useParams()
   const router = useRouter()
@@ -193,9 +222,7 @@ export default function ModulePage() {
           // Check if user has access to this course
           if (courseData.userId === user.uid) {
             // Find the module by ID
-            const moduleIndex = courseData.modules.findIndex(
-              m => m.id.toString() === moduleId.toString()
-            );
+            const moduleIndex = courseData.modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
             
             if (moduleIndex !== -1) {
               const moduleData = courseData.modules[moduleIndex];
@@ -214,30 +241,102 @@ export default function ModulePage() {
               
               // Check if module has topics property
               if (normalizedModule.topics && normalizedModule.topics.length > 0) {
-                // Normalize each topic to ensure it has all required fields
-                const normalizedTopics = normalizedModule.topics.map((topic: ModuleTopic) => {
-                  return {
-                    id: topic.id || `${normalizedModule.id}-1`,
-                    title: topic.title || 'Untitled Topic',
-                    content: topic.content || `# ${topic.title || 'Untitled Topic'}\n\nThis content is being prepared.`
-                  };
-                });
+                // Check if any topic has empty content
+                const emptyTopics = normalizedModule.topics.filter(topic => !topic.content);
                 
-                setTopics(normalizedTopics);
-                
-                // Check if we should restore a specific topic index (e.g., from a saved state)
-                // If not, just start from the first topic
-                setCurrentTopicIndex(0);
-              } else {
-                // Create default topics if none exist
-                const defaultTopics = [
-                  {
-                    id: `${normalizedModule.id}-1`,
-                    title: normalizedModule.title,
-                    content: `# ${normalizedModule.title}\n\nThis module content is being prepared.`
+                if (emptyTopics.length > 0) {
+                  // Generate content for empty topics
+                  const updatedTopics = [...normalizedModule.topics];
+                  
+                  for (const [index, topic] of emptyTopics.entries()) {
+                    try {
+                      toast.info(`Generating content for "${topic.title}"...`, { duration: 3000 });
+                      const content = await generateModuleContent(
+                        user.uid,
+                        courseId,
+                        moduleId.toString(),
+                        courseData.learningGoal || "learning this subject", 
+                        topic.title
+                      );
+                      
+                      // Update topic with generated content
+                      const topicIndex = updatedTopics.findIndex(t => t.id === topic.id);
+                      if (topicIndex !== -1) {
+                        updatedTopics[topicIndex].content = content;
+                      }
+                    } catch (error) {
+                      toast.error(`Failed to generate content for "${topic.title}"`);
+                    }
                   }
-                ];
-                setTopics(defaultTopics);
+                  
+                  // Update topics with generated content
+                  setTopics(updatedTopics);
+                  
+                  // Update module in Firebase
+                  const courseRef = doc(db, "courses", courseId);
+                  const courseDoc = await getDoc(courseRef);
+                  
+                  if (courseDoc.exists()) {
+                    const courseData = courseDoc.data();
+                    const modules = courseData.modules || [];
+                    const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
+                    
+                    if (moduleIndex !== -1) {
+                      modules[moduleIndex].topics = updatedTopics;
+                      await updateDoc(courseRef, { modules });
+                    }
+                  }
+                } else {
+                  setTopics(normalizedModule.topics);
+                }
+              } else {
+                // If module has no topics, generate a default one with content
+                toast.info(`Generating content for "${normalizedModule.title}"...`, { duration: 3000 });
+                
+                try {
+                  const content = await generateModuleContent(
+                    user.uid,
+                    courseId,
+                    moduleId.toString(),
+                    courseData.learningGoal || "learning this subject",
+                    normalizedModule.title
+                  );
+                  
+                  const defaultTopics = [
+                    {
+                      id: `${normalizedModule.id}-1`,
+                      title: normalizedModule.title,
+                      content: content
+                    }
+                  ];
+                  
+                  setTopics(defaultTopics);
+                  
+                  // Update module in Firebase
+                  const courseRef = doc(db, "courses", courseId);
+                  const courseDoc = await getDoc(courseRef);
+                  
+                  if (courseDoc.exists()) {
+                    const courseData = courseDoc.data();
+                    const modules = courseData.modules || [];
+                    const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
+                    
+                    if (moduleIndex !== -1) {
+                      modules[moduleIndex].topics = defaultTopics;
+                      await updateDoc(courseRef, { modules });
+                    }
+                  }
+                } catch (error) {
+                  toast.error(`Failed to generate content for "${normalizedModule.title}"`);
+                  const defaultTopics = [
+                    {
+                      id: `${normalizedModule.id}-1`,
+                      title: normalizedModule.title,
+                      content: `# ${normalizedModule.title}\n\nThis module content is being prepared.`
+                    }
+                  ];
+                  setTopics(defaultTopics);
+                }
               }
             } else {
               setError("Module not found");
@@ -305,9 +404,7 @@ export default function ModulePage() {
         const modules = courseData.modules || [];
         
         // Find the module being updated
-        const moduleIndex = modules.findIndex((m: any) => 
-          m.id.toString() === moduleId.toString()
-        );
+        const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
         
         if (moduleIndex !== -1) {
           // Calculate completed topics
@@ -534,9 +631,7 @@ export default function ModulePage() {
         const modules = courseData.modules || [];
         
         // Find the module being updated
-        const moduleIndex = modules.findIndex((m: any) => 
-          m.id.toString() === moduleId.toString()
-        );
+        const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
         
         if (moduleIndex !== -1) {
           // Update module progress
