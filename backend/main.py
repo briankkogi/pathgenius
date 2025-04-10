@@ -291,7 +291,8 @@ async def process_model_response(response, request):
     content = result.get("response", "")
     
     print("\n\033[94m=== MODEL RESPONSE ===\033[0m")
-    print(f"\033[92m{content[:500]}...\033[0m") # Print only the first 500 chars to avoid log spam
+    print(f"\033[92m{content[:500]}...\033[0m") 
+
     
     # Fix apostrophes in the JSON string before extraction
     content = content.replace('"s ', '"\'s ')
@@ -736,16 +737,6 @@ async def curate_course(request: CurationRequest):
                  return CourseResponse(**curated_courses[existing_course_id_memory])
 
 
-            # If not found in memory, *now* check Firestore
-            # (Assuming you have a way to query Firestore for courses by userId and learningGoal)
-            # existing_course_id_db = await check_existing_course_in_db(user_id, learning_goal) # Placeholder
-            # if existing_course_id_db:
-            #     logger.info(f"Found existing course in DB: {existing_course_id_db}, returning it.")
-            #     # Fetch the course data from DB and return
-            #     # course_data_db = await fetch_course_from_db(existing_course_id_db) # Placeholder
-            #     # return CourseResponse(**course_data_db)
-            #     # Note: Implementing DB checks requires Firestore query logic here
-
 
             # If we reach here, no existing course was found, proceed with generation
             logger.info(f"No existing course found. Starting course curation for user {user_id}, goal: {learning_goal}")
@@ -775,12 +766,6 @@ async def curate_course(request: CurationRequest):
 
                 processed_modules: List[CourseModule] = [] # Ensure type
 
-                # --- Module & Topic Processing Logic (largely the same) ---
-                # (Keep the improved topic_prompt from step 1)
-                # ... (loop through recommended_modules or create default if none)
-                # ... (AI call for topic content)
-                # ... (structure modules and topics into `processed_modules`)
-                # Example structure if no recommended modules:
                 if not recommended_modules:
                      logger.info("No recommended modules, creating default structure.")
                      # Create a default first module based on learning goal
