@@ -130,6 +130,10 @@ class ModuleContentRequest(BaseModel):
     learningGoal: str = ""
     moduleTitle: str
 
+# Add these near the top of the file with other global variables
+module_content_requests = set()  # Track in-flight module content requests
+module_content_locks = {}  # Locks for module content generation
+
 @app.post("/api/generate-assessment", response_model=AssessmentResponse)
 async def generate_assessment(request: AssessmentRequest):
     """Generate a text-based assessment based on learning goal and profession level"""
@@ -1195,17 +1199,130 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
 async def generate_module_content(request: ModuleContentRequest):
     """Generate content for a module that has no content"""
     try:
-        # Access fields directly from the Pydantic model
-        if not all([request.userId, request.courseId, request.moduleId, request.moduleTitle]):
-            raise HTTPException(status_code=400, detail="Missing required fields")
+        # Create a unique request key based on the request parameters
+        request_key = f"content_{request.userId}_{request.courseId}_{request.moduleId}_{request.moduleTitle}"
         
-        # Generate content for the module
-        content = await generate_topic_content(request.learningGoal, request.moduleTitle)
-        
-        return {"content": content}
+        # Get or create a lock for this specific request
+        if request_key not in module_content_locks:
+            module_content_locks[request_key] = asyncio.Lock()
+            
+        # Use the lock to ensure only one request processes at a time
+        async with module_content_locks[request_key]:
+            # Check if this request is already being processed
+            if request_key in module_content_requests:
+                logger.info(f"Content request {request_key} is already being processed. Waiting...")
+                
+                # Wait for a bit to see if the other request completes
+                for _ in range(3):  # Try checking 3 times
+                    await asyncio.sleep(1)
+                    # Check if we can return cached content (add a cache if needed)
+                    # For now, just inform the client to retry
+                
+                # If still processing after waiting, return an appropriate message
+                if request_key in module_content_requests:
+                    return {"status": "processing", "message": "Content generation is in progress, please retry shortly"}
+            
+            # Mark this request as processing
+            module_content_requests.add(request_key)
+            
+            try:
+                logger.info(f"Generating content for module: '{request.moduleTitle}' (Goal: {request.learningGoal})")
+                
+                # First, try to find a relevant YouTube video
+                video_id = None
+                video_title = None
+                
+                try:
+                    # Search for a relevant video first
+                    logger.info(f"Searching YouTube for: {request.moduleTitle} tutorial {request.learningGoal}")
+                    youtube_api_key = os.environ.get("YOUTUBE_API_KEY", "")
+                    search_query = f"{request.moduleTitle} tutorial {request.learningGoal}"
+                    
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.get(
+                            "https://www.googleapis.com/youtube/v3/search",
+                            params={
+                                "part": "snippet",
+                                "q": search_query,
+                                "key": youtube_api_key,
+                                "maxResults": 1,
+                                "type": "video",
+                                "videoEmbeddable": "true"
+                            }
+                        )
+                        
+                        if response.status_code == 200:
+                            search_results = response.json()
+                            if search_results.get("items") and len(search_results["items"]) > 0:
+                                video_id = search_results["items"][0]["id"]["videoId"]
+                                video_title = search_results["items"][0]["snippet"]["title"]
+                                logger.info(f"Found YouTube video: ID={video_id}, Title='{video_title}'")
+                        else:
+                            logger.error(f"YouTube API error: {response.status_code}")
+                            
+                except Exception as e:
+                    logger.error(f"HTTP error during YouTube search for '{search_query}': {str(e)}")
+                    # Try a simpler query as fallback
+                    logger.info(f"Fallback YouTube search for: {request.moduleTitle}")
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            response = await client.get(
+                                "https://www.googleapis.com/youtube/v3/search",
+                                params={
+                                    "part": "snippet",
+                                    "q": request.moduleTitle,
+                                    "key": youtube_api_key,
+                                    "maxResults": 1,
+                                    "type": "video",
+                                    "videoEmbeddable": "true"
+                                }
+                            )
+                            
+                            if response.status_code == 200:
+                                search_results = response.json()
+                                if search_results.get("items") and len(search_results["items"]) > 0:
+                                    video_id = search_results["items"][0]["id"]["videoId"]
+                                    video_title = search_results["items"][0]["snippet"]["title"]
+                                    logger.info(f"Found YouTube video: ID={video_id}, Title='{video_title}'")
+                            else:
+                                logger.error(f"YouTube API error: {response.status_code}")
+                    except Exception as e2:
+                        logger.error(f"HTTP error during fallback YouTube search for '{request.moduleTitle}': {str(e2)}")
+                
+                # Generate text content as well
+                text_content = None
+                try:
+                    logger.info(f"Making request to AI for topic TEXT: {request.moduleTitle}")
+                    text_content = await generate_topic_content(request.learningGoal, request.moduleTitle)
+                    logger.info(f"Generated {len(text_content)} characters of TEXT for topic {request.moduleTitle}")
+                except Exception as e:
+                    logger.error(f"Exception generating TEXT content for {request.moduleTitle}: {str(e)}")
+                
+                # Return the response with video, text, or both
+                result = {
+                    "content": text_content,
+                    "videoId": video_id,
+                    "videoTitle": video_title
+                }
+                
+                return result
+                
+            except Exception as e:
+                logger.error(f"Error generating module content: {e}")
+                raise HTTPException(status_code=500, detail=f"Error generating content: {str(e)}")
+            finally:
+                # Remove from processing set when done
+                if request_key in module_content_requests:
+                    module_content_requests.remove(request_key)
+                    
     except Exception as e:
-        logger.error(f"Error generating module content: {e}")
-        raise HTTPException(status_code=500, detail=f"Error generating content: {str(e)}")
+        logger.error(f"Outer exception in generate_module_content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process content request: {str(e)}")
+    finally:
+        # Clean up locks if they're no longer needed
+        # Only remove if there are no active requests using this lock
+        if request_key in module_content_locks and request_key not in module_content_requests:
+            del module_content_locks[request_key]
 
 if __name__ == "__main__":
     import uvicorn # type: ignore

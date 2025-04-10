@@ -206,136 +206,146 @@ export default function ModulePage() {
       try {
         setIsLoading(true);
         
-        // Only proceed with fetching data if user is available
         if (!user) {
-          // Don't set an error here, as the auth check effect will handle it
           setIsLoading(false);
           return;
         }
         
-        // Load course from Firebase
-        const courseDoc = await getDoc(doc(db, "courses", courseId));
+        const courseRef = doc(db, "courses", courseId);
+        const courseDoc = await getDoc(courseRef);
         
         if (courseDoc.exists()) {
           const courseData = courseDoc.data() as FirebaseCourseData;
           
-          // Check if user has access to this course
           if (courseData.userId === user.uid) {
-            // Find the module by ID
             const moduleIndex = courseData.modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
             
             if (moduleIndex !== -1) {
               const moduleData = courseData.modules[moduleIndex];
-              const normalizedModule = {
+              // Normalize the module data
+              const normalizedModule: CourseModule = {
                 ...moduleData,
                 id: moduleData.id || moduleIndex + 1,
                 title: moduleData.title || `Module ${moduleIndex + 1}`,
                 description: moduleData.description || `Module ${moduleIndex + 1} content`,
                 progress: moduleData.progress || 0,
-                // Load completed topics if available
-                completedTopics: moduleData.completedTopics || []
+                completedTopics: moduleData.completedTopics || [],
+                topics: (moduleData.topics || []).map(t => ({
+                  ...t,
+                  id: t.id || `${moduleIndex + 1}-${Math.random()}`,
+                  title: t.title || 'Untitled Topic'
+                })) as ModuleTopic[],
+                quiz: moduleData.quiz || []
               };
               
               setModule(normalizedModule);
               setProgress(normalizedModule.progress || 0);
               
-              // Check if module has topics property
-              if (normalizedModule.topics && normalizedModule.topics.length > 0) {
-                // Check if any topic has empty content
-                const emptyTopics = normalizedModule.topics.filter(topic => !topic.content);
+              // Initialize with existing topics
+              const existingTopics = normalizedModule.topics || [];
+              setTopics(existingTopics);
+              
+              // Track which topics need content generation
+              const topicsNeedingContent = existingTopics.filter(
+                topic => !topic.content && !topic.videoId
+              );
+              
+              // Only proceed with content generation if there are topics needing content
+              if (topicsNeedingContent.length > 0) {
+                toast.info(`Generating content for ${topicsNeedingContent.length} topic(s)...`, { duration: 3000 });
                 
-                if (emptyTopics.length > 0) {
-                  // Generate content for empty topics
-                  const updatedTopics = [...normalizedModule.topics];
-                  
-                  for (const [index, topic] of emptyTopics.entries()) {
-                    try {
-                      toast.info(`Generating content for "${topic.title}"...`, { duration: 3000 });
-                      const content = await generateModuleContent(
-                        user.uid,
-                        courseId,
-                        moduleId.toString(),
-                        courseData.learningGoal || "learning this subject", 
-                        topic.title
+                // Generate content for each topic sequentially to avoid multiple parallel requests
+                let updatedTopics = [...existingTopics];
+                let needsFirebaseUpdate = false;
+                
+                // Use a for...of loop for sequential async processing
+                for (const topic of topicsNeedingContent) {
+                  try {
+                    // Add a retry mechanism with backoff
+                    let retries = 0;
+                    let content = null;
+                    let videoId = null;
+                    
+                    while (retries < 3 && !content && !videoId) {
+                      try {
+                        const response = await fetch('http://localhost:8000/api/generate-module-content', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json'
+                          },
+                          body: JSON.stringify({
+                            userId: user.uid,
+                            courseId,
+                            moduleId: moduleId.toString(),
+                            learningGoal: courseData.learningGoal || "learning this subject",
+                            moduleTitle: topic.title
+                          })
+                        });
+                        
+                        if (response.ok) {
+                          const data = await response.json();
+                          content = data.content;
+                          videoId = data.videoId;
+                        } else if (response.status === 409) {
+                          // Handle case where request is already in progress
+                          await new Promise(resolve => setTimeout(resolve, 2000 * (retries + 1)));
+                        }
+                      } catch (error) {
+                        console.error(`Error generating content (attempt ${retries + 1}):`, error);
+                      }
+                      
+                      retries++;
+                      if (!content && !videoId && retries < 3) {
+                        // Wait before retrying
+                        await new Promise(resolve => setTimeout(resolve, 2000 * retries));
+                      }
+                    }
+                    
+                    // Update the topic with the new content/videoId
+                    const topicIndex = updatedTopics.findIndex(t => t.id === topic.id);
+                    if (topicIndex !== -1) {
+                      if (content) updatedTopics[topicIndex].content = content;
+                      if (videoId) updatedTopics[topicIndex].videoId = videoId;
+                      needsFirebaseUpdate = true;
+                    }
+                  } catch (error) {
+                    console.error(`Failed to generate content for "${topic.title}":`, error);
+                    
+                    // Set placeholder content
+                    const topicIndex = updatedTopics.findIndex(t => t.id === topic.id);
+                    if (topicIndex !== -1) {
+                      updatedTopics[topicIndex].content = `# ${topic.title}\n\nFailed to load content.`;
+                      needsFirebaseUpdate = true;
+                    }
+                  }
+                }
+                
+                // Update state with the new topics
+                setTopics(updatedTopics);
+                
+                // Update Firebase if needed
+                if (needsFirebaseUpdate) {
+                  try {
+                    const courseUpdateRef = doc(db, "courses", courseId);
+                    const currentCourseDoc = await getDoc(courseUpdateRef);
+                    
+                    if (currentCourseDoc.exists()) {
+                      const currentCourseData = currentCourseDoc.data();
+                      const currentModules = currentCourseData.modules || [];
+                      const targetModuleIndex = currentModules.findIndex(
+                        (m: CourseModule) => m.id.toString() === moduleId.toString()
                       );
                       
-                      // Update topic with generated content
-                      const topicIndex = updatedTopics.findIndex(t => t.id === topic.id);
-                      if (topicIndex !== -1) {
-                        updatedTopics[topicIndex].content = content;
+                      if (targetModuleIndex !== -1) {
+                        currentModules[targetModuleIndex].topics = updatedTopics;
+                        await updateDoc(courseUpdateRef, { modules: currentModules });
+                        toast.success("Module content updated");
                       }
-                    } catch (error) {
-                      toast.error(`Failed to generate content for "${topic.title}"`);
                     }
+                  } catch (updateError) {
+                    console.error("Error updating Firebase with generated content:", updateError);
+                    toast.error("Failed to save generated content");
                   }
-                  
-                  // Update topics with generated content
-                  setTopics(updatedTopics);
-                  
-                  // Update module in Firebase
-                  const courseRef = doc(db, "courses", courseId);
-                  const courseDoc = await getDoc(courseRef);
-                  
-                  if (courseDoc.exists()) {
-                    const courseData = courseDoc.data();
-                    const modules = courseData.modules || [];
-                    const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
-                    
-                    if (moduleIndex !== -1) {
-                      modules[moduleIndex].topics = updatedTopics;
-                      await updateDoc(courseRef, { modules });
-                    }
-                  }
-                } else {
-                  setTopics(normalizedModule.topics);
-                }
-              } else {
-                // If module has no topics, generate a default one with content
-                toast.info(`Generating content for "${normalizedModule.title}"...`, { duration: 3000 });
-                
-                try {
-                  const content = await generateModuleContent(
-                    user.uid,
-                    courseId,
-                    moduleId.toString(),
-                    courseData.learningGoal || "learning this subject",
-                    normalizedModule.title
-                  );
-                  
-                  const defaultTopics = [
-                    {
-                      id: `${normalizedModule.id}-1`,
-                      title: normalizedModule.title,
-                      content: content
-                    }
-                  ];
-                  
-                  setTopics(defaultTopics);
-                  
-                  // Update module in Firebase
-                  const courseRef = doc(db, "courses", courseId);
-                  const courseDoc = await getDoc(courseRef);
-                  
-                  if (courseDoc.exists()) {
-                    const courseData = courseDoc.data();
-                    const modules = courseData.modules || [];
-                    const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
-                    
-                    if (moduleIndex !== -1) {
-                      modules[moduleIndex].topics = defaultTopics;
-                      await updateDoc(courseRef, { modules });
-                    }
-                  }
-                } catch (error) {
-                  toast.error(`Failed to generate content for "${normalizedModule.title}"`);
-                  const defaultTopics = [
-                    {
-                      id: `${normalizedModule.id}-1`,
-                      title: normalizedModule.title,
-                      content: `# ${normalizedModule.title}\n\nThis module content is being prepared.`
-                    }
-                  ];
-                  setTopics(defaultTopics);
                 }
               }
             } else {
