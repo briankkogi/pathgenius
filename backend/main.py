@@ -10,7 +10,6 @@ import time
 import logging
 import asyncio
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -19,7 +18,7 @@ app = FastAPI(title="PathGenius Assessment API")
 # Configure CORS to allow requests from your Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Update with your frontend URL
+    allow_origins=["http://localhost:3000"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,28 +81,20 @@ class CourseResponse(BaseModel):
     modules: List[CourseModule]
     createdAt: str
 
-# In-memory storage for assessment sessions
 assessment_sessions = {}
 
-# Track active session IDs for each user to prevent duplicates
 active_user_sessions = {}
 
-# Track processing requests to prevent duplicate processing
 processing_requests = set()
 
-# Synchronization lock to prevent multiple identical requests
 request_locks = {}
 
-# In-memory storage for curated courses
 curated_courses = {}
 
-# Track processing requests to prevent duplicate processing
 processing_requests = set()
 
-# Synchronization lock to prevent multiple identical requests
 curation_locks = {}
 
-# Add these new models after your existing ones
 class ModuleQuizRequest(BaseModel):
     moduleId: str
     userId: str
@@ -130,25 +121,22 @@ class ModuleContentRequest(BaseModel):
     learningGoal: str = ""
     moduleTitle: str
 
-# Add these near the top of the file with other global variables
-module_content_requests = set()  # Track in-flight module content requests
-module_content_locks = {}  # Locks for module content generation
+
+module_content_requests = set() 
+module_content_locks = {}  
 
 @app.post("/api/generate-assessment", response_model=AssessmentResponse)
 async def generate_assessment(request: AssessmentRequest):
     """Generate a text-based assessment based on learning goal and profession level"""
     try:
-        # Check if there's already an active request for this user
         user_id = request.userId
         request_key = f"{user_id}_{request.learningGoal}_{request.professionLevel}"
         
-        # Create a lock for this specific request if it doesn't exist
         if request_key not in request_locks:
             request_locks[request_key] = asyncio.Lock()
             
         # Use the lock to ensure only one request processes at a time
         async with request_locks[request_key]:
-            # Check if we already have a session for this user before doing any work
             if user_id in active_user_sessions:
                 session_id = active_user_sessions[user_id]
                 if session_id in assessment_sessions:
@@ -158,11 +146,9 @@ async def generate_assessment(request: AssessmentRequest):
                         "sessionId": session_id
                     }
             
-            # If this request is already being processed, don't proceed
             if request_key in processing_requests:
                 logger.info(f"Request {request_key} is already being processed. Waiting for completion.")
-                # Wait a moment then return the current session if available
-                for _ in range(5):  # Try checking 5 times with a delay
+                for _ in range(5): 
                     await asyncio.sleep(1)
                     if user_id in active_user_sessions:
                         session_id = active_user_sessions[user_id]
@@ -172,16 +158,13 @@ async def generate_assessment(request: AssessmentRequest):
                                 "sessionId": session_id
                             }
                 
-                # If we still don't have a session, create an emergency one
                 logger.warning(f"Waited for request {request_key} but no session was created. Creating emergency questions.")
                 return create_emergency_questions(request)
                 
-            # Mark this request as processing
             processing_requests.add(request_key)
             logger.info(f"Starting to process request: {request_key}")
             
             try:
-                # Use a refined prompt that encourages more thinking
                 prompt = f"""
                 You are an educational assessment expert. Your task is to create exactly 5 thoughtful, open-ended questions to evaluate a student's knowledge of {request.learningGoal}. The student identifies as having a {request.professionLevel} level of experience.
 
@@ -221,21 +204,21 @@ async def generate_assessment(request: AssessmentRequest):
                 print(f"\033[96mLearning Goal:\033[0m {request.learningGoal}")
                 print(f"\033[96mProfession Level:\033[0m {request.professionLevel}")
                 
-                # Make the request to Ollama using the deepseek model
-                async with httpx.AsyncClient(timeout=180.0) as client:  # Increased timeout for more thinking time
+                
+                async with httpx.AsyncClient(timeout=180.0) as client:  
                     print("\n\033[94m=== SENDING REQUEST TO MODEL ===\033[0m")
-                    print(f"\033[93mPrompt:\033[0m {prompt[:300]}...")  # Print beginning of prompt
+                    print(f"\033[93mPrompt:\033[0m {prompt[:300]}...") 
                     
-                    # Only make one request with increased temperature for more diverse thinking
+                    
                     response = await client.post(
                         "http://localhost:11434/api/generate",
                         json={
                             "model": "deepseek-r1:1.5b",
                             "prompt": prompt,
                             "stream": False,
-                            "temperature": 0.7,  # Increased for more creative thinking
-                            "max_tokens": 4000,  # Increased for more thinking space
-                            "top_p": 0.9,       # Slightly more diverse sampling
+                            "temperature": 0.7,  
+                            "max_tokens": 4000,  
+                            "top_p": 0.9,       
                         }
                     )
                     
@@ -243,10 +226,8 @@ async def generate_assessment(request: AssessmentRequest):
                         print(f"\033[91mOllama API Error: {response.status_code}\033[0m")
                         raise HTTPException(status_code=500, detail=f"Failed to connect to Ollama: {response.status_code}")
                     
-                    # Process the model response
                     questions_data = await process_model_response(response, request)
                     
-                    # Create session with a timestamp to ensure uniqueness
                     session_id = f"session_{request.userId}_{int(time.time())}"
                     assessment_sessions[session_id] = {
                         "userId": request.userId,
@@ -256,7 +237,7 @@ async def generate_assessment(request: AssessmentRequest):
                         "createdAt": time.time()
                     }
                     
-                    # Track this session for this user
+                   
                     active_user_sessions[user_id] = session_id
                     
                     return {
@@ -268,19 +249,18 @@ async def generate_assessment(request: AssessmentRequest):
                 print(f"\n\033[91mUnexpected Error: {str(e)}\033[0m")
                 return create_emergency_questions(request)
             finally:
-                # Remove from processing set when done
+                
                 if request_key in processing_requests:
                     processing_requests.remove(request_key)
     
     except Exception as e:
-        # If any error occurs in the outer try/except
+        
         print(f"\n\033[91mOuter exception: {str(e)}\033[0m")
         request_key = f"{request.userId}_{request.learningGoal}_{request.professionLevel}"
         if request_key in processing_requests:
             processing_requests.remove(request_key)
         return create_emergency_questions(request)
     finally:
-        # Clean up locks if they're no longer needed
         request_key = f"{request.userId}_{request.learningGoal}_{request.professionLevel}"
         if request_key in request_locks and len(processing_requests) == 0:
             del request_locks[request_key]
@@ -294,7 +274,7 @@ async def process_model_response(response, request):
     print(f"\033[92m{content[:500]}...\033[0m") 
 
     
-    # Fix apostrophes in the JSON string before extraction
+ 
     content = content.replace('"s ', '"\'s ')
     content = content.replace(' s"', '\'s"')
     content = content.replace("don't", "don\\'t")
@@ -304,7 +284,6 @@ async def process_model_response(response, request):
     content = content.replace("you're", "you\\'re")
     content = content.replace("they're", "they\\'re")
     
-    # Extract the JSON array more robustly
     json_pattern = r'\[\s*\{.*?\}\s*\]'
     json_match = re.search(json_pattern, content, re.DOTALL)
     
@@ -315,7 +294,6 @@ async def process_model_response(response, request):
     if not json_match:
         print("\n\033[91mFailed to extract JSON from model response\033[0m")
         
-        # Try to manually create questions from the model output
         fallback_questions = extract_questions_manually(content)
         if fallback_questions:
             questions_data = fallback_questions
@@ -324,20 +302,16 @@ async def process_model_response(response, request):
     else:
         try:
             json_str = json_match.group(0)
-            
-            # Fix common JSON formatting issues
-            json_str = json_str.replace("'", '"')  # Replace single quotes with double quotes
-            json_str = re.sub(r',\s*\]', ']', json_str)  # Remove trailing commas
-            json_str = re.sub(r'(\w)"(\w)', r'\1\\"\2', json_str)  # Escape unescaped quotes within words
+            json_str = json_str.replace("'", '"')  
+            json_str = re.sub(r',\s*\]', ']', json_str)  
+            json_str = re.sub(r'(\w)"(\w)', r'\1\\"\2', json_str)  
             
             try:
                 questions_data = json.loads(json_str)
             except json.JSONDecodeError as e:
-                # If JSON parsing fails, fix problematic quotes
                 print(f"\n\033[91mJSON Decode Error: {str(e)}\033[0m")
                 print(f"Attempting to fix JSON string: {json_str[:100]}...")
                 
-                # Advanced apostrophe and quote handling
                 lines = json_str.split('\n')
                 for i, line in enumerate(lines):
                     if '"question":' in line and ('"s ' in line or ' s"' in line):
@@ -346,11 +320,9 @@ async def process_model_response(response, request):
                     
                 json_str = '\n'.join(lines)
                 
-                # Try to parse the fixed JSON string
                 try:
                     questions_data = json.loads(json_str)
                 except json.JSONDecodeError:
-                    # If it still fails, use regex to extract questions
                     fallback_questions = extract_questions_manually(content)
                     if fallback_questions:
                         questions_data = fallback_questions
@@ -360,27 +332,23 @@ async def process_model_response(response, request):
         except Exception as e:
             print(f"\n\033[91mException during JSON processing: {str(e)}\033[0m")
             raise HTTPException(status_code=500, detail=f"Error processing model response: {str(e)}")
-    
-    # Ensure we have exactly 5 questions and normalize IDs
+
     if not isinstance(questions_data, list):
         print("\n\033[91mQuestions data is not a list\033[0m")
         raise HTTPException(status_code=500, detail="Model response is not in expected format")
         
-    # Limit to exactly 5 questions and normalize IDs
-    # Pad with generic questions if we have fewer than 5
+
     while len(questions_data) < 5:
         questions_data.append({
             "id": len(questions_data) + 1,
             "question": f"Please describe your understanding of {request.learningGoal} at your current level."
         })
         
-    questions_data = questions_data[:5]  # Truncate if more than 5
+    questions_data = questions_data[:5]  
     
-    # Normalize IDs
     for i, q in enumerate(questions_data):
         q["id"] = i + 1
         
-        # Ensure question is a string
         if not isinstance(q.get("question"), str):
             q["question"] = f"Please explain a concept from {request.learningGoal} that you find interesting."
     
@@ -400,7 +368,6 @@ def create_emergency_questions(request):
         {"id": 5, "question": f"What are your goals for learning more about {request.learningGoal}?"}
     ]
     
-    # Create session with emergency questions
     session_id = f"session_{request.userId}_{int(time.time())}"
     assessment_sessions[session_id] = {
         "userId": request.userId,
@@ -410,7 +377,6 @@ def create_emergency_questions(request):
         "createdAt": time.time()
     }
     
-    # Track this session for this user
     active_user_sessions[request.userId] = session_id
     
     return {
@@ -422,12 +388,11 @@ def extract_questions_manually(content: str) -> List[Dict[str, Any]]:
     """Extract questions from model output using regex even if JSON parsing fails"""
     questions = []
     
-    # Look for patterns like question text with numbers or "id"
     question_patterns = [
-        r'"question"\s*:\s*"([^"]+)"',  # Standard JSON format
-        r'question\s*:\s*"([^"]+)"',    # Missing quotes around property
-        r'(\d+)\.\s+([^.?!]+\??)',      # Numbered list (1. What is X?)
-        r'"id"\s*:\s*\d+\s*,\s*"question"\s*:\s*"([^"]+)"'  # Full JSON format
+        r'"question"\s*:\s*"([^"]+)"', 
+        r'question\s*:\s*"([^"]+)"',  
+        r'(\d+)\.\s+([^.?!]+\??)',    
+        r'"id"\s*:\s*\d+\s*,\s*"question"\s*:\s*"([^"]+)"' 
     ]
     
     for pattern in question_patterns:
@@ -435,8 +400,7 @@ def extract_questions_manually(content: str) -> List[Dict[str, Any]]:
         if matches:
             for i, match in enumerate(matches):
                 if isinstance(match, tuple):
-                    # Some patterns might capture in groups
-                    question_text = match[-1]  # Last group is usually the text
+                    question_text = match[-1] 
                 else:
                     question_text = match
                 
@@ -445,20 +409,16 @@ def extract_questions_manually(content: str) -> List[Dict[str, Any]]:
                     "question": question_text.strip()
                 })
     
-    # Limit to 5 questions
     return questions[:5] if questions else []
 
-# Clean up old sessions periodically (helper function)
 def cleanup_old_sessions():
     current_time = time.time()
     expired_sessions = []
     
     for session_id, session_data in assessment_sessions.items():
-        # Remove sessions older than 24 hours
         if current_time - session_data.get("createdAt", 0) > 86400:
             expired_sessions.append(session_id)
             
-            # Also remove from active_user_sessions
             user_id = session_data.get("userId")
             if user_id in active_user_sessions and active_user_sessions[user_id] == session_id:
                 del active_user_sessions[user_id]
@@ -478,15 +438,13 @@ async def evaluate_assessment(submission: AssessmentSubmission):
     
     session = assessment_sessions[submission.sessionId]
     
-    # Basic completion calculation
     questions = session["questions"]
     total = len(questions)
     answered = sum(1 for q_id in [str(q["id"]) for q in questions] if q_id in submission.answers and submission.answers[q_id].strip() and submission.answers[q_id] != "Skipped")
     
-    # Calculate a completion score
+
     completion_score = (answered / total) * 100 if total > 0 else 0
     
-    # Store the answers in the session
     session["answers"] = submission.answers
     
     print("\n\033[94m=== ASSESSMENT SUBMISSION ===\033[0m")
@@ -499,15 +457,13 @@ async def evaluate_assessment(submission: AssessmentSubmission):
         print(f"\033[96mQuestion {q_id}:\033[0m {q['question']}")
         print(f"\033[92mAnswer:\033[0m {answer}\n")
     
-    # Initialize variables for AI evaluation
-    knowledge_score = completion_score  # Default to completion score
+    knowledge_score = completion_score  
     detailed_feedback = ""
     ai_next_steps = ""
     recommended_modules = []
     
     if answered > 0:
         try:
-            # Create a prompt that also asks for module recommendations with more explicit formatting instructions
             eval_prompt = f"""
             You are an educational assessment expert evaluating a student's knowledge of {session['learningGoal']}. 
             The student is at a {session['professionLevel']} level.
@@ -519,7 +475,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
             Here are the student's answers:
             """
             
-            # Add only the answered questions to the prompt
             for q in questions:
                 q_id = str(q["id"])
                 if q_id in submission.answers and submission.answers[q_id].strip() and submission.answers[q_id] != "Skipped":
@@ -527,7 +482,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
                     answer = submission.answers[q_id]
                     eval_prompt += f"\nQuestion: {question}\nAnswer: {answer}\n"
             
-            # Instructions for structured output with module recommendations - simplified
             eval_prompt += f"""
             Based on your analysis of the student's knowledge of {session['learningGoal']}, you must provide a JSON object with exactly this structure:
 
@@ -572,17 +526,16 @@ async def evaluate_assessment(submission: AssessmentSubmission):
             print(f"\033[95m{eval_prompt}\033[0m")
             print("\n\033[94m=== REQUESTING AI EVALUATION ===\033[0m")
             
-            # Make the request using the gemma3:4b model instead
             async with httpx.AsyncClient(timeout=240.0) as client:
                 ai_response = await client.post(
                     "http://localhost:11434/api/generate",
                     json={
-                        "model": "gemma3:4b",  # Changed from deepseek to gemma3
+                        "model": "gemma3:4b",  
                         "prompt": eval_prompt,
                         "stream": False,
-                        "temperature": 0.1,     # Low temperature for more consistent formatting
-                        "max_tokens": 8000,     # Plenty of tokens for full response
-                        "top_p": 0.95          # Slightly higher top_p for better completion
+                        "temperature": 0.1,     
+                        "max_tokens": 8000,     
+                        "top_p": 0.95          
                     }
                 )
                 
@@ -593,36 +546,29 @@ async def evaluate_assessment(submission: AssessmentSubmission):
                 result = ai_response.json()
                 content = result.get("response", "")
                 
-                # Print the FULL response for debugging
+
                 print("\n\033[94m=== FULL AI EVALUATION RESPONSE ===\033[0m")
                 print(f"\033[92m{content}\033[0m")
                 
-                # Extract JSON object - try multiple approaches
+
                 try:
-                    # First try direct JSON parsing in case the model responded with clean JSON
                     try:
-                        # Clean up response (remove markdown code block indicators if present)
                         if "```json" in content:
                             content = re.sub(r'```json\s*(.*?)\s*```', r'\1', content, flags=re.DOTALL)
                         elif "```" in content:
                             content = re.sub(r'```\s*(.*?)\s*```', r'\1', content, flags=re.DOTALL)
                         
-                        # Try to find a JSON object with braces
                         json_pattern = r'({[\s\S]*})'
                         json_match = re.search(json_pattern, content, re.DOTALL)
                         
                         if json_match:
                             json_str = json_match.group(1)
-                            # Replace any single quotes with double quotes
                             json_str = json_str.replace("'", '"')
-                            # Remove trailing commas before closing braces or brackets
                             json_str = re.sub(r',\s*}', '}', json_str)
                             json_str = re.sub(r',\s*]', ']', json_str)
                             
-                            # Parse JSON
                             ai_data = json.loads(json_str)
                             
-                            # Extract the relevant fields
                             if "knowledgeScore" in ai_data:
                                 knowledge_score = float(ai_data.get("knowledgeScore", completion_score))
                                 knowledge_score = max(0, min(100, knowledge_score))
@@ -640,7 +586,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
                     except json.JSONDecodeError as e:
                         print(f"\033[91mJSON Decode Error: {str(e)}\033[0m")
                         
-                        # Fall back to regex extraction for individual fields
                         knowledge_match = re.search(r'"knowledgeScore"\s*:\s*(\d+)', content)
                         if knowledge_match:
                             knowledge_score = float(knowledge_match.group(1))
@@ -653,7 +598,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
                         if nextsteps_match:
                             ai_next_steps = nextsteps_match.group(1).strip()
                             
-                        # Extract modules using regex
                         module_matches = re.finditer(r'{\s*"title"\s*:\s*"([^"]+)".*?"topics"\s*:\s*\[\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]', content, re.DOTALL)
                         
                         for match in module_matches:
@@ -672,7 +616,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
             print(f"\033[91mEvaluation error: {str(e)}\033[0m")
             raise HTTPException(status_code=500, detail=f"Assessment evaluation failed: {str(e)}")
     
-    # Log the final extracted data
     print("\n\033[94m=== FINAL EVALUATION DATA (RAW FROM AI) ===\033[0m")
     print(f"\033[96mKnowledge Score:\033[0m {knowledge_score}%")
     print(f"\033[96mFeedback:\033[0m {detailed_feedback}")
@@ -682,7 +625,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
         print(f"  Module {i+1}: {module.get('title', 'No title')}")
         print(f"    Topics: {', '.join(module.get('topics', []))}")
     
-    # Store the AI evaluation in the session
     session["aiEvaluation"] = {
         "detailedFeedback": detailed_feedback,
         "aiNextSteps": ai_next_steps,
@@ -691,7 +633,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
         "recommendedModules": recommended_modules
     }
     
-    # Return the evaluation directly
     return {
         "score": knowledge_score,
         "feedback": detailed_feedback,
@@ -702,7 +643,6 @@ async def evaluate_assessment(submission: AssessmentSubmission):
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    # Clean up old sessions when health check is called
     cleanup_old_sessions()
     return {"status": "ok", "timestamp": time.time()}
 
@@ -711,60 +651,44 @@ async def curate_course(request: CurationRequest):
     """Generate a single module course based on the learning goal"""
     user_id = request.userId
     learning_goal = request.learningGoal
-    # Use a more persistent key for the lock, not time-based
     request_key = f"curate_{user_id}_{learning_goal}"
 
-    # Get or create a lock for this specific user/goal combination
     lock = curation_locks.get(request_key)
     if lock is None:
         lock = asyncio.Lock()
         curation_locks[request_key] = lock
 
-    async with lock: # Acquire the lock for this specific request key
+    async with lock: 
         try:
-            # Check if a course already exists for this user/goal in memory
-            # This check is quick and avoids DB queries if we just created it
             existing_course_id_memory = None
             for course_id, course_data in curated_courses.items():
                  if course_data.get("userId") == user_id and \
                     course_data.get("title", "").startswith(f"{learning_goal}"):
                      existing_course_id_memory = course_id
-                     break # Found one
+                     break 
 
             if existing_course_id_memory:
                  logger.info(f"Returning existing course from memory: {existing_course_id_memory}")
-                 # Ensure the returned structure matches CourseResponse
                  return CourseResponse(**curated_courses[existing_course_id_memory])
 
-
-
-            # If we reach here, no existing course was found, proceed with generation
             logger.info(f"No existing course found. Starting course curation for user {user_id}, goal: {learning_goal}")
 
-            # Check if this specific request instance is already marked as processing
-            # (This handles the case where the same instance retries quickly)
             if request_key in processing_requests:
                  logger.warning(f"Request key {request_key} marked as processing but lock acquired. Possible race condition or stale state.")
-                 # You might choose to raise an error or wait again here, but the lock should prevent actual double processing.
 
-            processing_requests.add(request_key) # Mark as processing *after* lock acquisition
+            processing_requests.add(request_key)
 
             try:
-                # --- Course Generation Logic ---
-                course_id = f"course_{user_id}_{int(time.time())}" # Unique ID based on current time
+                course_id = f"course_{user_id}_{int(time.time())}"
 
-                # Validate recommended modules (same as before)
                 if not request.recommendedModules or len(request.recommendedModules) == 0:
                     logger.warning(f"No recommended modules provided from assessment.")
-                    # Return a different status or structure if modules are required
-                    # For now, proceeding without them might be okay if assessment isn't mandatory
-                    # raise HTTPException(status_code=400, detail="No recommended modules provided. Please complete an assessment first.")
-                    recommended_modules = [] # Allow proceeding without modules for now
+                    recommended_modules = [] 
                 else:
                     recommended_modules = request.recommendedModules
                 logger.info(f"Using recommended modules: {len(recommended_modules)} found")
 
-                processed_modules: List[CourseModule] = [] # Ensure type
+                processed_modules: List[CourseModule] = [] 
 
                 if not recommended_modules:
                      logger.info("No recommended modules, creating default structure.")
@@ -779,13 +703,11 @@ async def curate_course(request: CurationRequest):
                              description=f"An introduction to the core concepts of {learning_goal}.",
                              topics=[
                                  { "id": "1-1", "title": default_topic_title, "content": default_topic_content }
-                                 # Add more default topics if needed
                              ]
                          )
                      ]
 
                 else:
-                     # --- Existing Logic to process recommended_modules ---
                      if len(recommended_modules) > 0:
                         first_module_data = recommended_modules[0]
                         module_title = first_module_data.get('title', f"Module 1 on {learning_goal}")
@@ -794,8 +716,7 @@ async def curate_course(request: CurationRequest):
                         if "topics" in first_module_data and isinstance(first_module_data["topics"], list):
                             for j, topic_data in enumerate(first_module_data["topics"][:3]):
                                 topic_title = topic_data if isinstance(topic_data, str) else topic_data.get('title', f"Topic {j+1}")
-                                # Generate content for this topic (using improved prompt)
-                                topic_content = await generate_topic_content(learning_goal, topic_title) # Refactored AI call
+                                topic_content = await generate_topic_content(learning_goal, topic_title) 
                                 topics.append({
                                     "id": f"1-{j+1}",
                                     "title": topic_title,
@@ -810,7 +731,6 @@ async def curate_course(request: CurationRequest):
                         )
                         processed_modules.append(first_module)
 
-                        # Add remaining recommended modules (without content for now)
                         for i, module_data in enumerate(recommended_modules[1:5], start=1):
                              module_title = module_data.get('title', f"Module {i+1} on {learning_goal}")
                              empty_topics = []
@@ -825,49 +745,37 @@ async def curate_course(request: CurationRequest):
                                  description=f"Learn about {module_title} for {learning_goal}",
                                  topics=empty_topics
                              ))
-                     # --- End of processing recommended_modules ---
 
-
-                # --- Course Saving and Response ---
                 created_at_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 created_timestamp = time.time()
 
-                # Prepare final course data matching CourseResponse structure
                 final_course_data = {
                     "courseId": course_id,
-                    "userId": user_id, # Add userId for potential future filtering
+                    "userId": user_id, 
                     "title": f"{learning_goal} Course",
-                    "modules": [mod.dict() for mod in processed_modules], # Convert Pydantic models to dicts
+                    "modules": [mod.dict() for mod in processed_modules], 
                     "createdAt": created_at_str,
-                    "createdTimestamp": created_timestamp, # Keep internal timestamp
-                    # Add any other fields expected by CourseResponse/frontend
+                    "createdTimestamp": created_timestamp, 
                 }
 
-                # Store in memory
                 curated_courses[course_id] = final_course_data
 
                 logger.info(f"Successfully curated and stored course: {course_id}")
 
-                # Return using the Pydantic model for validation
                 return CourseResponse(**final_course_data)
 
             finally:
-                # Clean up processing request marker
+
                 if request_key in processing_requests:
                     processing_requests.remove(request_key)
 
         except Exception as e:
             logger.error(f"Error during locked course curation for {request_key}: {str(e)}", exc_info=True)
-            # Clean up lock state if error occurs
             if request_key in processing_requests:
                 processing_requests.remove(request_key)
             raise HTTPException(status_code=500, detail=f"Failed to generate course: {str(e)}")
 
-    # Lock is released automatically when exiting 'async with'
-
-# Helper function Refactors (add these outside the endpoint function)
 async def generate_topic_content(learning_goal: str, topic_title: str) -> str:
-    # (Contains the improved topic_prompt and httpx call logic)
     topic_prompt = f"""
     You are an expert educational content creator specializing in {learning_goal}.
     Your task is to write a detailed and comprehensive article about "{topic_title}".
@@ -909,7 +817,6 @@ async def generate_topic_content(learning_goal: str, topic_title: str) -> str:
             result = response.json()
             topic_content = result.get("response", "")
 
-            # Clean up content (same as before)
             if "```" in topic_content:
                  match = re.search(r'```(?:markdown)?\s*([\s\S]*?)\s*```', topic_content, re.DOTALL)
                  if match: topic_content = match.group(1).strip()
@@ -923,8 +830,8 @@ async def generate_topic_content(learning_goal: str, topic_title: str) -> str:
         return f"# {topic_title}\n\nError generating content."
 
 async def generate_default_topic_content(learning_goal: str, topic_title: str) -> str:
-     # Similar to generate_topic_content but maybe simpler prompt if needed
-     return await generate_topic_content(learning_goal, topic_title) # Reuse main generator for now
+
+     return await generate_topic_content(learning_goal, topic_title) 
 
 @app.get("/api/course/{course_id}")
 async def get_course(course_id: str):
@@ -934,7 +841,7 @@ async def get_course(course_id: str):
     
     return curated_courses[course_id]
 
-# Add these new endpoints
+
 @app.post("/api/generate-module-quiz", response_model=ModuleQuizResponse)
 async def generate_module_quiz(request: ModuleQuizRequest):
     """Generate a quiz based on module content"""
@@ -945,31 +852,26 @@ async def generate_module_quiz(request: ModuleQuizRequest):
         # Create a request key for locking
         request_key = f"quiz_{user_id}_{module_id}"
         
-        # Create a lock for this specific request if it doesn't exist
         if request_key not in request_locks:
             request_locks[request_key] = asyncio.Lock()
             
-        # Use the lock to ensure only one request processes at a time
+
         async with request_locks[request_key]:
-            # Check if this request is already being processed
+
             if request_key in processing_requests:
                 logger.info(f"Quiz request {request_key} is already being processed.")
-                # Wait for completion - similar to assessment logic
-                for _ in range(5):  # Try checking 5 times with a delay
+
+                for _ in range(5):  
                     await asyncio.sleep(1)
-                    # Could check for an existing quiz here, similar to assessments
-            
-            # Mark this request as processing
+     
             processing_requests.add(request_key)
             logger.info(f"Starting to process module quiz request: {request_key}")
             
             try:
-                # Extract all content from topics to use for question generation
                 module_content = ""
                 for topic in request.topicContent:
                     module_content += topic.get("content", "") + "\n\n"
                 
-                # Create a prompt for generating questions based on module content
                 prompt = f"""
                 You are an educational assessment expert. Your task is to create 5 thoughtful, open-ended questions to evaluate a student's understanding of the module content below.
 
@@ -1002,12 +904,11 @@ async def generate_module_quiz(request: ModuleQuizRequest):
                 
                 logger.info(f"Generating quiz questions for module {module_id}")
                 
-                # Make the request to the AI model
                 async with httpx.AsyncClient(timeout=180.0) as client:
                     response = await client.post(
                         "http://localhost:11434/api/generate",
                         json={
-                            "model": "gemma3:4b",  # Use a potentially better model for quiz generation
+                            "model": "gemma3:4b", 
                             "prompt": prompt,
                             "stream": False,
                             "temperature": 0.7,
@@ -1019,13 +920,10 @@ async def generate_module_quiz(request: ModuleQuizRequest):
                         logger.error(f"AI Error: {response.status_code}")
                         raise HTTPException(status_code=500, detail=f"Failed to generate quiz: {response.status_code}")
                     
-                    # Process the model response, similar to assessment processing
                     questions_data = await process_model_response(response, request)
                     
-                    # Create a unique quiz ID
                     quiz_id = f"quiz_{request.userId}_{request.moduleId}_{int(time.time())}"
                     
-                    # Store in memory for later evaluation (similar to assessment sessions)
                     assessment_sessions[quiz_id] = {
                         "userId": request.userId,
                         "moduleId": request.moduleId,
@@ -1043,7 +941,6 @@ async def generate_module_quiz(request: ModuleQuizRequest):
                 logger.error(f"Error generating module quiz: {str(e)}")
                 raise HTTPException(status_code=500, detail=f"Error generating quiz: {str(e)}")
             finally:
-                # Remove from processing set when done
                 if request_key in processing_requests:
                     processing_requests.remove(request_key)
     
@@ -1059,26 +956,21 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
     
     session = assessment_sessions[submission.quizId]
     
-    # Basic completion calculation
     questions = session["questions"]
     total = len(questions)
     answered = sum(1 for q_id in [str(q["id"]) for q in questions] if q_id in submission.answers and submission.answers[q_id].strip())
     
-    # Calculate a completion score
     completion_score = (answered / total) * 100 if total > 0 else 0
     
-    # Store the answers in the session
     session["answers"] = submission.answers
     
     logger.info(f"Evaluating module quiz for module {session['moduleId']}")
     
-    # Initialize variables for AI evaluation
-    knowledge_score = completion_score  # Default to completion score
+    knowledge_score = completion_score  
     detailed_feedback = ""
     
     if answered > 0:
         try:
-            # Create a prompt for evaluation
             eval_prompt = f"""
             You are an educational assessment expert evaluating a student's understanding of module content.
             
@@ -1087,7 +979,6 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
             Here are the student's answers:
             """
             
-            # Add only the answered questions to the prompt
             for q in questions:
                 q_id = str(q["id"])
                 if q_id in submission.answers and submission.answers[q_id].strip():
@@ -1095,7 +986,6 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
                     answer = submission.answers[q_id]
                     eval_prompt += f"\nQuestion: {question}\nAnswer: {answer}\n"
             
-            # Instructions for structured output
             eval_prompt += """
             Based on your analysis, provide a JSON object with this structure:
             {
@@ -1109,7 +999,6 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
             
             logger.info("Sending quiz evaluation request to AI")
             
-            # Make the request to the AI model
             async with httpx.AsyncClient(timeout=180.0) as client:
                 ai_response = await client.post(
                     "http://localhost:11434/api/generate",
@@ -1129,22 +1018,17 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
                 result = ai_response.json()
                 content = result.get("response", "")
                 
-                # Extract JSON from the response
                 try:
-                    # Find a JSON object with braces
                     json_pattern = r'({[\s\S]*})'
                     json_match = re.search(json_pattern, content, re.DOTALL)
                     
                     if json_match:
                         json_str = json_match.group(1)
-                        # Clean up the JSON string
                         json_str = json_str.replace("'", '"')
                         json_str = re.sub(r',\s*}', '}', json_str)
                         
-                        # Parse JSON
                         ai_data = json.loads(json_str)
                         
-                        # Extract the fields
                         if "score" in ai_data:
                             knowledge_score = float(ai_data.get("score", completion_score))
                             knowledge_score = max(0, min(100, knowledge_score))
@@ -1160,12 +1044,10 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
             logger.error(f"Module quiz evaluation error: {str(e)}")
             detailed_feedback = "An error occurred during evaluation. Your quiz has been recorded but couldn't be automatically graded."
     
-    # Determine completion status based on score
     completion_status = "completed"
     if knowledge_score < 70:
         completion_status = "needs_review"
     
-    # Store the evaluation results in the session
     session["evaluation"] = {
         "score": knowledge_score,
         "feedback": detailed_feedback,
@@ -1173,7 +1055,6 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
         "evaluatedAt": time.time()
     }
     
-    # Return the evaluation
     return {
         "score": knowledge_score,
         "feedback": detailed_feedback,
@@ -1184,41 +1065,32 @@ async def evaluate_module_quiz(submission: ModuleQuizSubmission):
 async def generate_module_content(request: ModuleContentRequest):
     """Generate content for a module that has no content"""
     try:
-        # Create a unique request key based on the request parameters
         request_key = f"content_{request.userId}_{request.courseId}_{request.moduleId}_{request.moduleTitle}"
         
-        # Get or create a lock for this specific request
         if request_key not in module_content_locks:
             module_content_locks[request_key] = asyncio.Lock()
             
-        # Use the lock to ensure only one request processes at a time
+
         async with module_content_locks[request_key]:
-            # Check if this request is already being processed
+
             if request_key in module_content_requests:
                 logger.info(f"Content request {request_key} is already being processed. Waiting...")
                 
-                # Wait for a bit to see if the other request completes
-                for _ in range(3):  # Try checking 3 times
+                for _ in range(3):  
                     await asyncio.sleep(1)
-                    # Check if we can return cached content (add a cache if needed)
-                    # For now, just inform the client to retry
-                
-                # If still processing after waiting, return an appropriate message
+ 
                 if request_key in module_content_requests:
                     return {"status": "processing", "message": "Content generation is in progress, please retry shortly"}
             
-            # Mark this request as processing
             module_content_requests.add(request_key)
             
             try:
                 logger.info(f"Generating content for module: '{request.moduleTitle}' (Goal: {request.learningGoal})")
                 
-                # First, try to find a relevant YouTube video
                 video_id = None
                 video_title = None
                 
                 try:
-                    # Search for a relevant video first
                     logger.info(f"Searching YouTube for: {request.moduleTitle} tutorial {request.learningGoal}")
                     youtube_api_key = os.environ.get("YOUTUBE_API_KEY", "")
                     search_query = f"{request.moduleTitle} tutorial {request.learningGoal}"
@@ -1247,7 +1119,6 @@ async def generate_module_content(request: ModuleContentRequest):
                             
                 except Exception as e:
                     logger.error(f"HTTP error during YouTube search for '{search_query}': {str(e)}")
-                    # Try a simpler query as fallback
                     logger.info(f"Fallback YouTube search for: {request.moduleTitle}")
                     try:
                         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1274,7 +1145,6 @@ async def generate_module_content(request: ModuleContentRequest):
                     except Exception as e2:
                         logger.error(f"HTTP error during fallback YouTube search for '{request.moduleTitle}': {str(e2)}")
                 
-                # Generate text content as well
                 text_content = None
                 try:
                     logger.info(f"Making request to AI for topic TEXT: {request.moduleTitle}")
@@ -1283,7 +1153,6 @@ async def generate_module_content(request: ModuleContentRequest):
                 except Exception as e:
                     logger.error(f"Exception generating TEXT content for {request.moduleTitle}: {str(e)}")
                 
-                # Return the response with video, text, or both
                 result = {
                     "content": text_content,
                     "videoId": video_id,
@@ -1296,7 +1165,6 @@ async def generate_module_content(request: ModuleContentRequest):
                 logger.error(f"Error generating module content: {e}")
                 raise HTTPException(status_code=500, detail=f"Error generating content: {str(e)}")
             finally:
-                # Remove from processing set when done
                 if request_key in module_content_requests:
                     module_content_requests.remove(request_key)
                     
@@ -1304,8 +1172,7 @@ async def generate_module_content(request: ModuleContentRequest):
         logger.error(f"Outer exception in generate_module_content: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process content request: {str(e)}")
     finally:
-        # Clean up locks if they're no longer needed
-        # Only remove if there are no active requests using this lock
+
         if request_key in module_content_locks and request_key not in module_content_requests:
             del module_content_locks[request_key]
 

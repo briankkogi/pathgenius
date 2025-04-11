@@ -12,7 +12,6 @@ export default function Header() {
 
   useEffect(() => {
     // Check if the user is signed in
-    // This is a placeholder and should be replaced with actual authentication logic
     setIsSignedIn(pathname.startsWith("/dashboard") || pathname.startsWith("/course") || pathname === "/onboarding")
   }, [pathname])
 

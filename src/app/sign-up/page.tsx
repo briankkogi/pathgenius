@@ -28,12 +28,10 @@ export default function SignUp() {
       // Create the user in Firebase Authentication
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
       
-      // Update the user's display name
       await updateProfile(userCredential.user, {
         displayName: name
       })
       
-      // Create a user document in Firestore
       await setDoc(doc(db, "users", userCredential.user.uid), {
         name,
         email,
@@ -41,11 +39,9 @@ export default function SignUp() {
         lastLogin: new Date().toISOString(),
       })
 
-      // Sign in the user automatically
       await signInWithEmailAndPassword(auth, email, password)
       
       toast.success("Account created successfully!")
-      // Redirect to onboarding
       router.push("/onboarding")
     } catch (error: any) {
       console.error("Error signing up:", error)

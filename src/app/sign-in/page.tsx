@@ -25,8 +25,6 @@ export default function SignIn() {
 
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password)
-      
-      // Always redirect signed-in users to dashboard
       router.push("/dashboard")
       toast.success("Signed in successfully!")
     } catch (error: any) {

@@ -183,12 +183,7 @@ export default function ModulePage() {
   
   // Add a separate effect to check for authentication state
   useEffect(() => {
-    // This will run when the user state changes
-    // Firebase will set user to null if not authenticated
-    // and to the user object when authenticated
-    
-    // We only want to show the error if we're sure authentication is complete
-    // and the user is not available
+
     if (user === null) {
       // User is definitely not authenticated
       setError("Please sign in to view this module");

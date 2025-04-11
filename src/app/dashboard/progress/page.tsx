@@ -63,7 +63,6 @@ export default function ProgressPage() {
     fetchCourseProgress()
   }, [user])
 
-  // Calculate overview metrics
   const overallProgress = courses.length > 0 
     ? Math.round(courses.reduce((sum, course) => sum + course.progress, 0) / courses.length) 
     : 0

@@ -44,17 +44,14 @@ export default function Dashboard() {
           
           if (userDoc.exists()) {
             userProfile = userDoc.data() as UserData;
-            // Use displayName from Firebase Auth as fallback
             if (!userProfile.name && user.displayName) {
               userProfile.name = user.displayName;
             }
-            // Use email from Firebase Auth as fallback
             if (!userProfile.email && user.email) {
               userProfile.email = user.email;
             }
             setUserData(userProfile);
           } else {
-            // Create basic user profile if it doesn't exist
             userProfile = {
               name: user.displayName || "User",
               email: user.email || ""
@@ -90,7 +87,6 @@ export default function Dashboard() {
     fetchUserData();
   }, [user]);
 
-  // Calculate overall stats
   const overallProgress = courses.length > 0 
     ? Math.round(courses.reduce((sum, course) => sum + course.progress, 0) / courses.length) 
     : 0;
@@ -103,7 +99,7 @@ export default function Dashboard() {
   }
 
   if (!userData) {
-    return null; // Or a better fallback UI
+    return null;
   }
 
   return (

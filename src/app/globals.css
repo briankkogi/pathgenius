@@ -82,12 +82,10 @@
   }
 }
 
-/* Add this to create a smooth transition for color changes */
 * {
   transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, transform 0.3s ease;
 }
 
-/* Add this new class for the features section background */
 .features-bg-light {
   background-color: rgba(249, 250, 251, 0.5);
 }
@@ -96,7 +94,6 @@
   background-color: rgba(17, 24, 39, 0.5);
 }
 
-/* Scrollbar styles */
 ::-webkit-scrollbar {
   width: 8px;
 }
@@ -114,7 +111,6 @@
   background: hsl(var(--muted-foreground));
 }
 
-/* Smooth transitions for sidebar */
 .sidebar {
   position: fixed;
   top: 0;

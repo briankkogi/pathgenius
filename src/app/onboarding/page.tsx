@@ -41,10 +41,8 @@ export default function Onboarding() {
     const loadData = async () => {
       try {
         if (user && !isAddCourse) {
-          // Check if user already has preferences
           const userDoc = await getDoc(doc(db, "users", user.uid))
           if (userDoc.exists() && userDoc.data().initialLearningGoal) {
-            // User has already completed onboarding, redirect to dashboard
             router.push("/dashboard")
             return
           }
@@ -65,21 +63,17 @@ export default function Onboarding() {
     } else if (step === 2 && professionLevel && user) {
       setIsSubmitting(true)
       try {
-        // Before creating a session, check if the backend is healthy
         try {
           const response = await fetch('http://localhost:8000/api/health');
           if (!response.ok) {
             throw new Error("Assessment service is currently unavailable");
           }
         } catch (backendError) {
-          // Show a warning but proceed anyway
           toast.warning("Assessment service may be unavailable. Your experience might be limited.");
           console.warn("Backend health check failed:", backendError);
-          // Continue with the rest of the process
         }
         
         if (isAddCourse) {
-          // Create a new assessment session document in Firestore
           const assessmentSessionRef = doc(collection(db, "assessmentSessions"));
           await setDoc(assessmentSessionRef, {
             userId: user.uid,
@@ -93,13 +87,10 @@ export default function Onboarding() {
           toast.success("Course preferences saved! Let's complete a quick assessment.");
           router.push(`/assessment?sessionId=${assessmentSessionRef.id}`);
         } else {
-          // Handle initial onboarding - save to user profile
-          // Instead of setting a general professionLevel, we'll create a topics map
-          // that stores the professionLevel for each topic
+
           await setDoc(doc(db, "users", user.uid), {
             // Add the initial learning goal
             initialLearningGoal: learningGoal,
-            // Store topic-specific profession levels
             topics: {
               [learningGoal]: {
                 professionLevel,
@@ -109,7 +100,6 @@ export default function Onboarding() {
             updatedAt: new Date().toISOString(),
           }, { merge: true });
           
-          // Create assessment session for initial onboarding
           const assessmentSessionRef = doc(collection(db, "assessmentSessions"));
           await setDoc(assessmentSessionRef, {
             userId: user.uid,
