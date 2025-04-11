@@ -17,7 +17,6 @@ const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
 export const db = getFirestore(app)
 
-// Initialize Analytics only on client side
 if (typeof window !== 'undefined') {
   getAnalytics(app)
 } 
