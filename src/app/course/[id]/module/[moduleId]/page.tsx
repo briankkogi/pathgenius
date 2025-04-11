@@ -23,7 +23,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 
-// Add the FirebaseCourseData interface that's used in this file
 interface FirebaseCourseData {
   userId: string;
   title: string;
@@ -33,7 +32,6 @@ interface FirebaseCourseData {
   createdAt: string;
 }
 
-//mock data as fallback
 const coursesData = {
   1: {
     modules: [
@@ -118,13 +116,10 @@ const coursesData = {
           },
         ],
       },
-      // Add more modules here
     ],
   },
-  // Add more courses as needed
 }
 
-// Add this function before the ModulePage component
 async function generateModuleContent(userId: string, courseId: string, moduleId: string, learningGoal: string, moduleTitle: string) {
   try {
     const response = await fetch('http://localhost:8000/api/generate-module-content', {
@@ -165,10 +160,8 @@ export default function ModulePage() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("content")
   const { user } = useFirebase()
-  // Add a state to track if we've checked for authentication
   const [authChecked, setAuthChecked] = useState(false)
 
-  // For quiz functionality
   const [isQuizLoading, setIsQuizLoading] = useState(false)
   const [quizStarted, setQuizStarted] = useState(false)
   const [quizSubmitted, setQuizSubmitted] = useState(false)
@@ -178,22 +171,17 @@ export default function ModulePage() {
   const [quizScore, setQuizScore] = useState<number | null>(null)
   const [quizFeedback, setQuizFeedback] = useState("")
 
-  // Create topics array from module content if needed
   const [topics, setTopics] = useState<ModuleTopic[]>([])
   
-  // Add a separate effect to check for authentication state
   useEffect(() => {
 
     if (user === null) {
-      // User is definitely not authenticated
       setError("Please sign in to view this module");
       setAuthChecked(true);
     } else if (user) {
-      // User is authenticated, clear any auth error
       setError(null);
       setAuthChecked(true);
     }
-    // If user is undefined, we're still initializing, don't set error yet
   }, [user]);
 
   useEffect(() => {
@@ -217,7 +205,6 @@ export default function ModulePage() {
             
             if (moduleIndex !== -1) {
               const moduleData = courseData.modules[moduleIndex];
-              // Normalize the module data
               const normalizedModule: CourseModule = {
                 ...moduleData,
                 id: moduleData.id || moduleIndex + 1,
@@ -235,28 +222,21 @@ export default function ModulePage() {
               
               setModule(normalizedModule);
               setProgress(normalizedModule.progress || 0);
-              
-              // Initialize with existing topics
               const existingTopics = normalizedModule.topics || [];
               setTopics(existingTopics);
               
-              // Track which topics need content generation
               const topicsNeedingContent = existingTopics.filter(
                 topic => !topic.content && !topic.videoId
               );
               
-              // Only proceed with content generation if there are topics needing content
               if (topicsNeedingContent.length > 0) {
                 toast.info(`Generating content for ${topicsNeedingContent.length} topic(s)...`, { duration: 3000 });
                 
-                // Generate content for each topic sequentially to avoid multiple parallel requests
                 let updatedTopics = [...existingTopics];
                 let needsFirebaseUpdate = false;
                 
-                // Use a for...of loop for sequential async processing
                 for (const topic of topicsNeedingContent) {
                   try {
-                    // Add a retry mechanism with backoff
                     let retries = 0;
                     let content = null;
                     let videoId = null;
@@ -282,7 +262,6 @@ export default function ModulePage() {
                           content = data.content;
                           videoId = data.videoId;
                         } else if (response.status === 409) {
-                          // Handle case where request is already in progress
                           await new Promise(resolve => setTimeout(resolve, 2000 * (retries + 1)));
                         }
                       } catch (error) {
@@ -291,12 +270,10 @@ export default function ModulePage() {
                       
                       retries++;
                       if (!content && !videoId && retries < 3) {
-                        // Wait before retrying
                         await new Promise(resolve => setTimeout(resolve, 2000 * retries));
                       }
                     }
                     
-                    // Update the topic with the new content/videoId
                     const topicIndex = updatedTopics.findIndex(t => t.id === topic.id);
                     if (topicIndex !== -1) {
                       if (content) updatedTopics[topicIndex].content = content;
@@ -306,7 +283,6 @@ export default function ModulePage() {
                   } catch (error) {
                     console.error(`Failed to generate content for "${topic.title}":`, error);
                     
-                    // Set placeholder content
                     const topicIndex = updatedTopics.findIndex(t => t.id === topic.id);
                     if (topicIndex !== -1) {
                       updatedTopics[topicIndex].content = `# ${topic.title}\n\nFailed to load content.`;
@@ -315,10 +291,8 @@ export default function ModulePage() {
                   }
                 }
                 
-                // Update state with the new topics
                 setTopics(updatedTopics);
                 
-                // Update Firebase if needed
                 if (needsFirebaseUpdate) {
                   try {
                     const courseUpdateRef = doc(db, "courses", courseId);
@@ -360,7 +334,6 @@ export default function ModulePage() {
       }
     };
     
-    // Only fetch module if user is available
     if (courseId && moduleId && user) {
       fetchModule();
     }
@@ -368,7 +341,6 @@ export default function ModulePage() {
 
   useEffect(() => {
     if (module) {
-      // Update progress based on current topic
       const newProgress = topics.length > 0 
         ? Math.round(((currentTopicIndex + 1) / topics.length) * 100)
         : 0
@@ -377,30 +349,22 @@ export default function ModulePage() {
   }, [currentTopicIndex, module, topics])
 
   const handleTopicNavigation = async (direction: "prev" | "next") => {
-    // Mark current topic as completed if navigating to next
     if (direction === "next" && topics.length > 0) {
       await markTopicAsCompleted(currentTopicIndex);
     }
     
-    // Update current topic index
     if (direction === "next" && currentTopicIndex < topics.length - 1) {
       setCurrentTopicIndex(prevIndex => prevIndex + 1);
-      // Remove scrolling behavior
     } else if (direction === "prev" && currentTopicIndex > 0) {
       setCurrentTopicIndex(prevIndex => prevIndex - 1);
-      // Remove scrolling behavior
     }
   };
 
-  // Add a function to mark a topic as completed
   const markTopicAsCompleted = async (topicIndex: number) => {
     if (!user || !module || topicIndex >= topics.length) return;
     
     try {
-      // Get the current topic
       const topic = topics[topicIndex];
-      
-      // Update module progress in Firebase
       const courseRef = doc(db, "courses", courseId);
       const courseDoc = await getDoc(courseRef);
       
@@ -408,45 +372,36 @@ export default function ModulePage() {
         const courseData = courseDoc.data();
         const modules = courseData.modules || [];
         
-        // Find the module being updated
         const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
         
         if (moduleIndex !== -1) {
-          // Calculate completed topics
           const completedTopics = new Set([
             ...(modules[moduleIndex].completedTopics || []),
             topicIndex
           ]);
-          
-          // Update the module with completed topics
+
           modules[moduleIndex].completedTopics = Array.from(completedTopics);
-          
-          // Calculate module progress (percentage of completed topics)
           const totalTopics = topics.length;
           const completedCount = completedTopics.size;
           const moduleProgress = Math.round((completedCount / totalTopics) * 100);
           
-          // Update module progress
+
           modules[moduleIndex].progress = moduleProgress;
           
-          // Calculate overall course progress (average of all module progress)
           const totalProgress = modules.reduce(
             (sum: number, mod: any) => sum + (mod.progress || 0), 
             0
           );
           const courseProgress = Math.round(totalProgress / modules.length);
           
-          // Update Firebase with new progress data
           await updateDoc(courseRef, {
             modules: modules,
             progress: courseProgress,
             updatedAt: new Date().toISOString()
           });
           
-          // Update local state
           setProgress(moduleProgress);
           
-          // Show success notification
           toast.success("Progress saved");
         }
       }
@@ -457,11 +412,9 @@ export default function ModulePage() {
   };
 
   const navigateToModule = (direction: "prev" | "next") => {
-    // Convert moduleId to number for comparison
     const currentModuleNum = parseInt(moduleId)
     const newModuleNum = direction === "prev" ? currentModuleNum - 1 : currentModuleNum + 1
     
-    // Navigate if the new module number is valid (between 1 and 5)
     if (newModuleNum >= 1 && newModuleNum <= 5) {
       router.push(`/course/${courseId}/module/${newModuleNum}`)
     }
@@ -473,13 +426,11 @@ export default function ModulePage() {
     setIsQuizLoading(true);
     
     try {
-      // Prepare content for quiz generation
       const topicContent = topics.map(topic => ({
         title: topic.title,
         content: topic.content || ""
       }));
       
-      // Call backend to generate quiz questions
       const response = await fetch('http://localhost:8000/api/generate-module-quiz', {
         method: 'POST',
         headers: {
@@ -523,7 +474,6 @@ export default function ModulePage() {
     setIsQuizLoading(true);
     
     try {
-      // Call backend to evaluate quiz
       const response = await fetch('http://localhost:8000/api/evaluate-module-quiz', {
         method: 'POST',
         headers: {
@@ -544,9 +494,7 @@ export default function ModulePage() {
       setQuizFeedback(data.feedback);
       setQuizSubmitted(true);
       
-      // If the quiz score is passing (>=70%), update module progress
       if (data.score >= 70) {
-        // Save the quiz results to Firebase
         const quizResultRef = doc(db, "quizResults", quizId);
         await setDoc(quizResultRef, {
           userId: user.uid,
@@ -556,16 +504,14 @@ export default function ModulePage() {
           feedback: data.feedback,
           completionStatus: data.completionStatus,
           answers: quizAnswers,
-          questions: quizQuestions, // Save the questions along with answers
+          questions: quizQuestions, 
           completedAt: new Date().toISOString()
         });
         
-        // Update course progress to indicate this module has been completed via quiz
         await updateModuleProgress(100);
         
         toast.success("Quiz completed successfully!");
       } else {
-        // Still save quiz results even if score is below passing
         const quizResultRef = doc(db, "quizResults", quizId);
         await setDoc(quizResultRef, {
           userId: user.uid,
@@ -575,7 +521,7 @@ export default function ModulePage() {
           feedback: data.feedback,
           completionStatus: "needs_review",
           answers: quizAnswers,
-          questions: quizQuestions, // Save questions for all quiz attempts
+          questions: quizQuestions, 
           completedAt: new Date().toISOString()
         });
         
@@ -594,14 +540,11 @@ export default function ModulePage() {
     if (!user) return;
     
     try {
-      // Update module progress to 100%
       await updateModuleProgress(100);
       
-      // Get the next module ID
       const currentModuleId = parseInt(moduleId);
       const nextModuleId = currentModuleId + 1;
       
-      // Check if there's another module in the course
       const courseRef = doc(db, "courses", courseId);
       const courseDoc = await getDoc(courseRef);
       
@@ -609,7 +552,6 @@ export default function ModulePage() {
         const courseData = courseDoc.data();
         const totalModules = courseData.modules.length;
         
-        // If there are more modules, navigate to the next one
         if (nextModuleId <= totalModules) {
           router.push(`/course/${courseId}/module/${nextModuleId}`);
           toast.success("Module completed! Moving to the next module.");
@@ -625,7 +567,6 @@ export default function ModulePage() {
     }
   };
 
-  // Add this helper function to update module progress
   const updateModuleProgress = async (progress: number) => {
     try {
       const courseRef = doc(db, "courses", courseId);
@@ -635,28 +576,23 @@ export default function ModulePage() {
         const courseData = courseDoc.data();
         const modules = courseData.modules || [];
         
-        // Find the module being updated
         const moduleIndex = modules.findIndex((m: CourseModule) => m.id.toString() === moduleId.toString());
         
         if (moduleIndex !== -1) {
-          // Update module progress
           modules[moduleIndex].progress = progress;
           
-          // Calculate overall course progress (average of all module progress)
           const totalProgress = modules.reduce(
             (sum: number, mod: any) => sum + (mod.progress || 0), 
             0
           );
           const courseProgress = Math.round(totalProgress / modules.length);
           
-          // Update Firebase with new progress data
           await updateDoc(courseRef, {
             modules: modules,
             progress: courseProgress,
             updatedAt: new Date().toISOString()
           });
           
-          // Update local state
           setProgress(progress);
         }
       }
@@ -666,12 +602,10 @@ export default function ModulePage() {
     }
   };
 
-  // Update the checkExistingQuiz function to better handle loading completed quizzes
   const checkExistingQuiz = async () => {
     if (!user) return;
     
     try {
-      // Query all quiz results for this module, not just completed ones
       const quizQuery = query(
         collection(db, "quizResults"),
         where("userId", "==", user.uid),
@@ -682,25 +616,22 @@ export default function ModulePage() {
       const quizSnapshot = await getDocs(quizQuery);
       
       if (!quizSnapshot.empty) {
-        // Use the most recent quiz result (in case there are multiple attempts)
         const sortedDocs = quizSnapshot.docs.sort((a, b) => {
           const dateA = new Date(a.data().completedAt || 0);
           const dateB = new Date(b.data().completedAt || 0);
-          return dateB.getTime() - dateA.getTime(); // Sort in descending order (newest first)
+          return dateB.getTime() - dateA.getTime(); 
         });
         
         const quizData = sortedDocs[0].data();
-        setQuizId(sortedDocs[0].id); // Store the quiz ID for potential updates
+        setQuizId(sortedDocs[0].id); 
         setQuizSubmitted(true);
         setQuizScore(quizData.score);
         setQuizFeedback(quizData.feedback || "");
         setQuizAnswers(quizData.answers || {});
         
-        // Set quiz questions from saved data
         if (quizData.questions && Array.isArray(quizData.questions)) {
           setQuizQuestions(quizData.questions);
         } else {
-          // Create placeholder questions based on answers if no questions saved
           const placeholderQuestions = Object.keys(quizData.answers || {}).map((qId, index) => ({
             id: qId,
             question: `Question ${index + 1}`
@@ -708,9 +639,7 @@ export default function ModulePage() {
           setQuizQuestions(placeholderQuestions);
         }
         
-        // If a completed quiz exists, automatically set the active tab to quiz
         if (quizData.completionStatus === "completed" || quizData.score >= 70) {
-          // Set a small delay to ensure component is mounted
           setTimeout(() => {
             setActiveTab("quiz");
           }, 100);
@@ -721,7 +650,6 @@ export default function ModulePage() {
     }
   };
 
-  // Move this call to useEffect to ensure it runs only once
   useEffect(() => {
     if (user && courseId && moduleId) {
       checkExistingQuiz();
@@ -745,7 +673,6 @@ export default function ModulePage() {
     )
   }
 
-  // Only show auth error if we've checked auth state and user is not available
   if ((authChecked && !user) || error) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -858,7 +785,6 @@ export default function ModulePage() {
                             <div className="prose max-w-none" 
                                  dangerouslySetInnerHTML={{ 
                                    __html: topic.content ? 
-                                     // Convert markdown to HTML (basic version)
                                      topic.content
                                        .replace(/^# (.*$)/gm, '<h1>$1</h1>')
                                        .replace(/^## (.*$)/gm, '<h2>$1</h2>')
@@ -885,32 +811,26 @@ export default function ModulePage() {
                               {currentTopicIndex === topics.length - 1 ? (
                                 <Button 
                                   onClick={async () => {
-                                    // Mark last topic as completed
                                     await markTopicAsCompleted(currentTopicIndex);
                                     
-                                    // Get the next module ID
                                     const currentModuleId = parseInt(moduleId);
                                     const nextModuleId = currentModuleId + 1;
                                     
-                                    // Check if there's another module in the course
                                     const courseRef = doc(db, "courses", courseId);
                                     const courseDoc = await getDoc(courseRef);
                                     
                                     if (courseDoc.exists()) {
                                       const courseData = courseDoc.data();
                                       const totalModules = courseData.modules.length;
-                                      
-                                      // If there are more modules, navigate to the next one
+
                                       if (nextModuleId <= totalModules) {
                                         router.push(`/course/${courseId}/module/${nextModuleId}`);
                                         toast.success("Module completed! Moving to the next module.");
                                       } else {
-                                        // If this was the last module, go back to course page
                                         router.push(`/course/${courseId}`);
                                         toast.success("Congratulations! You've completed the final module.");
                                       }
                                     } else {
-                                      // Fallback if course data not found
                                       router.push(`/course/${courseId}`);
                                     }
                                   }}
@@ -931,7 +851,6 @@ export default function ModulePage() {
                         </div>
                       ))
                     ) : (
-                      // Handle modules without topics - show direct content
                       <div>
                         {('videoId' in module) && module.videoId ? (
                           <div className="space-y-4">
@@ -1106,7 +1025,6 @@ export default function ModulePage() {
                             <Button 
                               className="w-full"
                               onClick={() => {
-                                // Mark module as completed when quiz is passed
                                 if (quizScore >= 70) {
                                   handleMarkModuleComplete();
                                 } else {
@@ -1172,7 +1090,6 @@ export default function ModulePage() {
               </p>
               
               {quizSubmitted && quizScore !== null ? (
-                // Show quiz result button if quiz is completed
                 <div className="mt-4">
                   <Button 
                     variant={quizScore >= 70 ? "default" : "outline"} 
@@ -1186,7 +1103,6 @@ export default function ModulePage() {
                   </Button>
                 </div>
               ) : (
-                // Show quiz options if not yet completed
                 <>
                   {progress >= 80 && !quizSubmitted && (
                     <div className="mt-4">

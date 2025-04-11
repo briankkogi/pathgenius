@@ -15,7 +15,6 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { CourseModule, Course } from "@/app/types/course"
 
-// Define interfaces to fix type errors
 interface CourseData {
   modules: number;
   initialProgress: number;
@@ -31,7 +30,6 @@ interface FirebaseCourseData {
   createdAt: string;
 }
 
-// Update to use typed record
 const coursesData: Record<string, {modules: number, initialProgress: number, content: CourseModule[]}> = {
   "1": {
     modules: 5,
@@ -69,7 +67,6 @@ const coursesData: Record<string, {modules: number, initialProgress: number, con
       },
     ]
   },
-  // Add more courses as needed
 }
 
 export default function CoursePage() {
@@ -88,17 +85,14 @@ export default function CoursePage() {
       try {
         if (!user) return;
         
-        // Load course from Firebase
         const courseDoc = await getDoc(doc(db, "courses", courseId));
         
         if (courseDoc.exists()) {
           const courseData = courseDoc.data() as FirebaseCourseData;
-          
-          // Check if course belongs to the user
+
           if (courseData.userId === user.uid) {
             console.log("Retrieved course data:", courseData);
             
-            // Prepare the course object
             const course: Course = {
               id: courseId,
               title: courseData.title || `Course on ${learningGoal}`,
@@ -114,7 +108,6 @@ export default function CoursePage() {
             
             setCourse(course);
             
-            // Calculate which modules are completed (100% progress)
             const completedModuleIndices = courseData.modules
               .map((module: CourseModule, index: number) => 
                 (module.progress || 0) === 100 ? index : -1)
@@ -125,7 +118,6 @@ export default function CoursePage() {
             setError("You don't have permission to view this course");
           }
         } else {
-          // If not found in Firebase, try to load from mock data
           if (coursesData[courseId]) {
             const mockData = coursesData[courseId];
             const mockCourse = {
@@ -192,7 +184,6 @@ export default function CoursePage() {
   )
 }
 
-// Add prop types to components
 interface CourseProgressProps {
   course: Course;
   completedModules: number;
